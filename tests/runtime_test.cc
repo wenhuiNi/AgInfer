@@ -24,6 +24,12 @@ int main(int argc, char** argv) {
     return 5;
   }
   if (session.value().GetTargetInfo().cuda_arch != "sm89") return 6;
+  const auto inputs = session.value().GetInputInfo();
+  const auto outputs = session.value().GetOutputInfo();
+  if (inputs.size() != 3 || inputs[0].name != "input_ids" || inputs[0].dtype != aginfer::DType::kInt32 ||
+      inputs[0].shape != std::vector<std::int64_t>({1}) || inputs[0].byte_size != 4) return 9;
+  if (outputs.size() != 1 || outputs[0].name != "actions" || outputs[0].dtype != aginfer::DType::kFp16 ||
+      outputs[0].shape != std::vector<std::int64_t>({1}) || outputs[0].byte_size != 2) return 10;
   auto workspace = session.value().GetRequiredWorkspace("default");
   if (!workspace.ok() || workspace.value().arena_bytes != 4096 || workspace.value().workspace_bytes != 2048) return 7;
 

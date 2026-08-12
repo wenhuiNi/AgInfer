@@ -60,7 +60,20 @@ def create_artifacts(root: Path, arches: tuple[str, ...] = ("sm89",)) -> Path:
                     "cuda_arch": arch,
                     "arena_bytes": 4096,
                     "workspace_bytes": 2048,
-                    "shape_dispatch": [{"profile": "default", "kernel": 0}],
+                    "shape_dispatch": [
+                        {
+                            "profile": "default",
+                            "inputs": [
+                                {"name": "input_ids", "dtype": "I32", "shape": [1]},
+                                {"name": "pixel_values", "dtype": "F16", "shape": [1]},
+                                {"name": "state", "dtype": "F16", "shape": [1]},
+                            ],
+                            "outputs": [{"name": "actions", "dtype": "F16", "shape": [1]}],
+                            "launches": [
+                                {"kernel": "noop", "grid": [1, 1, 1], "block": [1, 1, 1], "arguments": []}
+                            ],
+                        }
+                    ],
                     "cuda_graph_templates": [{"profile": "default"}],
                 }
             )

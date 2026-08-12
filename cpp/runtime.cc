@@ -1,5 +1,7 @@
 #include "aginfer/runtime.h"
 
+#include "cuda_driver.h"
+#include "plan.h"
 #include "sha256.h"
 
 #include <algorithm>
@@ -174,6 +176,35 @@ StatusOr<std::uint64_t> JsonUnsigned(std::string_view json, std::string_view key
   if (!found) return Error(StatusCode::kCorruptPackage, "invalid manifest integer " + std::string(key));
   return value;
 }
+
+DType ToPublicDType(std::uint32_t value) {
+  switch (static_cast<internal::PlanDType>(value)) {
+    case internal::PlanDType::kFp32: return DType::kFp32;
+    case internal::PlanDType::kFp16: return DType::kFp16;
+    case internal::PlanDType::kBf16: return DType::kBf16;
+    case internal::PlanDType::kFp8E4M3: return DType::kFp8E4M3;
+    case internal::PlanDType::kInt32: return DType::kInt32;
+  }
+  return DType::kFp32;
+}
+
+MemoryLocation ToPublicLocation(std::uint32_t value) {
+  return value == static_cast<std::uint32_t>(internal::PlanLocation::kDevice)
+             ? MemoryLocation::kDevice
+             : MemoryLocation::kHost;
+}
+
+TensorInfo ToTensorInfo(const internal::ParsedPlan& plan,
+                        const internal::PlanTensor& tensor) {
+  TensorInfo result;
+  result.name = std::string(plan.String(tensor.name_offset));
+  result.dtype = ToPublicDType(tensor.dtype);
+  result.shape.assign(tensor.shape, tensor.shape + tensor.rank);
+  result.stride.assign(tensor.stride, tensor.stride + tensor.rank);
+  result.byte_size = static_cast<std::size_t>(tensor.byte_size);
+  result.location = ToPublicLocation(tensor.location);
+  return result;
+}
 }  // namespace
 
 struct Runtime::Impl { RuntimeOptions options; };
@@ -184,8 +215,144 @@ struct Model::Impl {
 };
 struct Session::Impl {
   Runtime::Impl* runtime = nullptr; Model::Impl* model = nullptr; const Variant* variant = nullptr;
-  std::string profile;
+  internal::ParsedPlan plan;
+  const internal::PlanProfile* profile = nullptr;
+  std::unique_ptr<internal::CudaDriver> cuda;
+  internal::CuModule module = nullptr;
+  internal::CuDevicePtr weights = 0;
+  internal::CuDevicePtr arena = 0;
+  internal::CuDevicePtr workspace = 0;
+  std::vector<internal::CuFunction> functions;
+  std::vector<const TensorView*> tensor_bindings;
+  std::vector<std::uint64_t> argument_values;
+  std::vector<void*> kernel_parameters;
+
+  Status InitializeCuda();
+  Status BindTensors(const std::vector<TensorView>& inputs,
+                     const std::vector<TensorView>& outputs);
+  Status Launch(CudaStream stream);
+
+  ~Impl() {
+    if (cuda == nullptr) return;
+    cuda->MakeCurrent();
+    cuda->Free(workspace);
+    cuda->Free(arena);
+    cuda->Free(weights);
+    cuda->UnloadModule(module);
+  }
 };
+
+Status Session::Impl::InitializeCuda() {
+  if (cuda != nullptr) return cuda->MakeCurrent();
+  auto created = internal::CudaDriver::Create(variant->arch);
+  if (!created.ok()) return created.status();
+  cuda = std::make_unique<internal::CudaDriver>(std::move(created).value());
+  auto loaded_module = cuda->LoadModule(model->data + variant->kernel_offset);
+  if (!loaded_module.ok()) return loaded_module.status();
+  module = loaded_module.value();
+
+  auto weight_allocation = cuda->Allocate(variant->weight_size);
+  if (!weight_allocation.ok()) return weight_allocation.status();
+  weights = weight_allocation.value();
+  Status status = cuda->CopyHostToDevice(
+      weights, model->data + variant->weight_offset,
+      static_cast<std::size_t>(variant->weight_size));
+  if (!status.ok()) return status;
+  auto arena_allocation = cuda->Allocate(plan.header->arena_bytes);
+  if (!arena_allocation.ok()) return arena_allocation.status();
+  arena = arena_allocation.value();
+  auto workspace_allocation = cuda->Allocate(plan.header->workspace_bytes);
+  if (!workspace_allocation.ok()) return workspace_allocation.status();
+  workspace = workspace_allocation.value();
+
+  functions.clear();
+  functions.reserve(profile->launch_count);
+  for (std::uint32_t index = 0; index < profile->launch_count; ++index) {
+    const internal::PlanLaunch& launch = plan.launches[profile->first_launch + index];
+    auto function = cuda->GetFunction(module, std::string(plan.String(launch.kernel_name_offset)));
+    if (!function.ok()) return function.status();
+    functions.push_back(function.value());
+  }
+  return Status::Ok();
+}
+
+Status Session::Impl::BindTensors(const std::vector<TensorView>& inputs,
+                                  const std::vector<TensorView>& outputs) {
+  std::fill(tensor_bindings.begin(), tensor_bindings.end(), nullptr);
+  std::size_t expected_inputs = 0;
+  std::size_t expected_outputs = 0;
+  for (std::uint32_t index = 0; index < profile->tensor_count; ++index) {
+    const internal::PlanTensor& tensor = plan.tensors[profile->first_tensor + index];
+    if (tensor.io_kind == static_cast<std::uint32_t>(internal::PlanIoKind::kInput)) ++expected_inputs;
+    else ++expected_outputs;
+  }
+  if (inputs.size() != expected_inputs || outputs.size() != expected_outputs)
+    return Error(StatusCode::kInvalidArgument, "input or output tensor count does not match the selected profile");
+
+  auto bind_group = [&](const std::vector<TensorView>& views, internal::PlanIoKind kind) -> Status {
+    for (const TensorView& view : views) {
+      const internal::PlanTensor* expected = nullptr;
+      std::uint32_t expected_index = 0;
+      for (std::uint32_t index = 0; index < profile->tensor_count; ++index) {
+        const std::uint32_t global_index = profile->first_tensor + index;
+        const internal::PlanTensor& candidate = plan.tensors[global_index];
+        if (candidate.io_kind == static_cast<std::uint32_t>(kind) &&
+            plan.String(candidate.name_offset) == view.name) {
+          expected = &candidate;
+          expected_index = global_index;
+          break;
+        }
+      }
+      if (expected == nullptr)
+        return Error(StatusCode::kInvalidArgument, "unexpected tensor for selected profile: " + view.name);
+      if (tensor_bindings[expected_index] != nullptr)
+        return Error(StatusCode::kInvalidArgument, "duplicate TensorView: " + view.name);
+      const DType expected_dtype = ToPublicDType(expected->dtype);
+      const MemoryLocation expected_location = ToPublicLocation(expected->location);
+      if (view.dtype != expected_dtype || view.location != expected_location)
+        return Error(StatusCode::kInvalidArgument, "dtype or memory location mismatch for tensor: " + view.name);
+      if (view.data == nullptr || view.byte_size < expected->byte_size || view.shape.size() != expected->rank ||
+          view.stride.size() != expected->rank)
+        return Error(StatusCode::kInvalidArgument, "buffer, byte size, or rank mismatch for tensor: " + view.name);
+      for (std::uint32_t dimension = 0; dimension < expected->rank; ++dimension) {
+        if (view.shape[dimension] != expected->shape[dimension] ||
+            view.stride[dimension] != expected->stride[dimension])
+          return Error(StatusCode::kInvalidArgument, "shape or stride is outside the selected profile: " + view.name);
+      }
+      tensor_bindings[expected_index] = &view;
+    }
+    return Status::Ok();
+  };
+  Status status = bind_group(inputs, internal::PlanIoKind::kInput);
+  if (!status.ok()) return status;
+  status = bind_group(outputs, internal::PlanIoKind::kOutput);
+  if (!status.ok()) return status;
+  return Status::Ok();
+}
+
+Status Session::Impl::Launch(CudaStream stream) {
+  for (std::uint32_t launch_index = 0; launch_index < profile->launch_count; ++launch_index) {
+    const internal::PlanLaunch& launch = plan.launches[profile->first_launch + launch_index];
+    for (std::uint32_t index = 0; index < launch.argument_count; ++index) {
+      const internal::PlanArgument& argument = plan.arguments[launch.first_argument + index];
+      switch (static_cast<internal::PlanArgKind>(argument.kind)) {
+        case internal::PlanArgKind::kTensor:
+          argument_values[index] = static_cast<std::uint64_t>(
+              reinterpret_cast<std::uintptr_t>(tensor_bindings[argument.index]->data));
+          break;
+        case internal::PlanArgKind::kScalarU32:
+        case internal::PlanArgKind::kScalarF32: argument_values[index] = argument.value; break;
+        case internal::PlanArgKind::kArenaOffset: argument_values[index] = arena + argument.offset; break;
+        case internal::PlanArgKind::kWeightsOffset: argument_values[index] = weights + argument.offset; break;
+      }
+      kernel_parameters[index] = &argument_values[index];
+    }
+    Status status = cuda->Launch(functions[launch_index], launch.grid, launch.block,
+                                 launch.shared_bytes, stream, kernel_parameters.data());
+    if (!status.ok()) return status;
+  }
+  return Status::Ok();
+}
 
 Runtime::Runtime(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 Runtime::Runtime(Runtime&&) noexcept = default; Runtime& Runtime::operator=(Runtime&&) noexcept = default; Runtime::~Runtime() = default;
@@ -279,31 +446,63 @@ StatusOr<Session> Session::Create(Runtime& runtime, Model& model, const SessionO
       ro.cuda_runtime_version_override > runtime_max.value() || ro.cublaslt_abi_override != cublas.value() ||
       ro.cudnn_abi_override != cudnn.value())
     return Error(StatusCode::kIncompatibleAbi, "CUDA/cuBLASLt/cuDNN compatibility check failed");
-  auto impl = std::make_unique<Impl>(); impl->runtime = runtime.impl_.get(); impl->model = model.impl_.get();
-  impl->variant = selected; impl->profile = options.profile; return Session(std::move(impl));
+  auto impl = std::make_unique<Impl>();
+  impl->runtime = runtime.impl_.get();
+  impl->model = model.impl_.get();
+  impl->variant = selected;
+  Status plan_status = internal::ParsePlan(
+      model.impl_->data + selected->plan_offset,
+      static_cast<std::size_t>(selected->plan_size), selected->arch,
+      selected->weight_size, &impl->plan);
+  if (!plan_status.ok()) return plan_status;
+  if (options.profile.empty()) impl->profile = &impl->plan.profiles[0];
+  else impl->profile = impl->plan.FindProfile(options.profile);
+  if (impl->profile == nullptr)
+    return Error(StatusCode::kInvalidArgument, "profile is not present in the static execution plan: " + options.profile);
+  impl->tensor_bindings.resize(impl->plan.header->tensor_count);
+  std::uint32_t max_arguments = 0;
+  for (std::uint32_t index = 0; index < impl->profile->launch_count; ++index) {
+    max_arguments = std::max(max_arguments,
+        impl->plan.launches[impl->profile->first_launch + index].argument_count);
+  }
+  impl->argument_values.resize(max_arguments);
+  impl->kernel_parameters.resize(max_arguments);
+  return Session(std::move(impl));
 }
 
 TargetInfo Session::GetTargetInfo() const {
   return {HostPlatform(), ArchName(impl_->variant->arch), impl_->model->header->runtime_abi};
 }
-std::vector<std::string> Session::GetInputInfo() const { return {"input_ids", "pixel_values", "state"}; }
-std::vector<std::string> Session::GetOutputInfo() const { return {"actions"}; }
-StatusOr<WorkspaceInfo> Session::GetRequiredWorkspace(const std::string& requested_profile) const {
-  const std::string_view plan(reinterpret_cast<const char*>(impl_->model->data + impl_->variant->plan_offset), impl_->variant->plan_size);
-  const std::string& profile = requested_profile.empty() ? impl_->profile : requested_profile;
-  if (!profile.empty()) {
-    const std::string canonical_name = "\"profile\":\"" + profile + "\"";
-    if (plan.find(canonical_name) == std::string_view::npos)
-      return Error(StatusCode::kInvalidArgument, "profile is not present in the static execution plan: " + profile);
+std::vector<TensorInfo> Session::GetInputInfo() const {
+  std::vector<TensorInfo> result;
+  for (std::uint32_t index = 0; index < impl_->profile->tensor_count; ++index) {
+    const internal::PlanTensor& tensor = impl_->plan.tensors[impl_->profile->first_tensor + index];
+    if (tensor.io_kind == static_cast<std::uint32_t>(internal::PlanIoKind::kInput))
+      result.emplace_back(ToTensorInfo(impl_->plan, tensor));
   }
-  auto arena = JsonUnsigned(plan, "arena_bytes"); auto workspace = JsonUnsigned(plan, "workspace_bytes");
-  if (!arena.ok()) return arena.status();
-  if (!workspace.ok()) return workspace.status();
-  return WorkspaceInfo{arena.value(), workspace.value()};
+  return result;
 }
-Status Session::Enqueue(const std::vector<TensorView>&, const std::vector<TensorView>&,
-                        const RunOptions&, CudaStream) {
-  return Error(StatusCode::kUnimplemented, "kernel launch backend is not included in the schema/runtime milestone");
+std::vector<TensorInfo> Session::GetOutputInfo() const {
+  std::vector<TensorInfo> result;
+  for (std::uint32_t index = 0; index < impl_->profile->tensor_count; ++index) {
+    const internal::PlanTensor& tensor = impl_->plan.tensors[impl_->profile->first_tensor + index];
+    if (tensor.io_kind == static_cast<std::uint32_t>(internal::PlanIoKind::kOutput))
+      result.emplace_back(ToTensorInfo(impl_->plan, tensor));
+  }
+  return result;
+}
+StatusOr<WorkspaceInfo> Session::GetRequiredWorkspace(const std::string& requested_profile) const {
+  if (!requested_profile.empty() && impl_->plan.FindProfile(requested_profile) == nullptr)
+    return Error(StatusCode::kInvalidArgument, "profile is not present in the static execution plan: " + requested_profile);
+  return WorkspaceInfo{impl_->plan.header->arena_bytes, impl_->plan.header->workspace_bytes};
+}
+Status Session::Enqueue(const std::vector<TensorView>& inputs, const std::vector<TensorView>& outputs,
+                        const RunOptions&, CudaStream stream) {
+  Status status = impl_->BindTensors(inputs, outputs);
+  if (!status.ok()) return status;
+  status = impl_->InitializeCuda();
+  if (!status.ok()) return status;
+  return impl_->Launch(stream);
 }
 
 const char* StatusCodeName(StatusCode code) noexcept {
@@ -313,7 +512,6 @@ const char* StatusCodeName(StatusCode code) noexcept {
     case StatusCode::kCorruptPackage: return "CORRUPT_PACKAGE"; case StatusCode::kIncompatiblePlatform: return "INCOMPATIBLE_PLATFORM";
     case StatusCode::kIncompatibleArchitecture: return "INCOMPATIBLE_ARCHITECTURE"; case StatusCode::kIncompatibleAbi: return "INCOMPATIBLE_ABI";
     case StatusCode::kCudaError: return "CUDA_ERROR"; case StatusCode::kOutOfMemory: return "OUT_OF_MEMORY";
-    case StatusCode::kUnimplemented: return "UNIMPLEMENTED";
   }
   return "UNKNOWN";
 }

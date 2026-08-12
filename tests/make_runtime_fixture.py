@@ -6,22 +6,38 @@ import struct
 from pathlib import Path
 
 from aginfer.aim import AimWriter, VariantPayload
+from aginfer.plan import compile_execution_plan
 from aginfer.schema import CudaArch, Platform
 
 
 def main() -> int:
     if len(sys.argv) != 2:
         return 2
-    plan = json.dumps(
-        {
-            "cuda_arch": "sm89",
-            "arena_bytes": 4096,
-            "workspace_bytes": 2048,
-            "shape_dispatch": [{"profile": "default", "kernel": 0}],
-            "cuda_graph_templates": [{"profile": "default"}],
-        },
-        separators=(",", ":"),
-    ).encode()
+    def plan(arch: CudaArch) -> bytes:
+        return compile_execution_plan(
+            {
+                "cuda_arch": arch.name_string,
+                "arena_bytes": 4096,
+                "workspace_bytes": 2048,
+                "shape_dispatch": [
+                    {
+                        "profile": "default",
+                        "inputs": [
+                            {"name": "input_ids", "dtype": "I32", "shape": [1]},
+                            {"name": "pixel_values", "dtype": "F16", "shape": [1]},
+                            {"name": "state", "dtype": "F16", "shape": [1]},
+                        ],
+                        "outputs": [{"name": "actions", "dtype": "F16", "shape": [1]}],
+                        "launches": [
+                            {"kernel": "noop", "grid": [1, 1, 1], "block": [1, 1, 1], "arguments": []}
+                        ],
+                    }
+                ],
+                "cuda_graph_templates": [{"profile": "default"}],
+            },
+            arch,
+            weight_size=7,
+        ).data
     manifest = {
         "runtime_abi": 1,
         "toolchain": {
@@ -47,8 +63,8 @@ def main() -> int:
         graph={"opset": 1},
         tensors={"count": 0, "items": []},
         variants=[
-            VariantPayload(CudaArch.SM89, cubin(89), b"weights", plan),
-            VariantPayload(CudaArch.SM120, cubin(120), b"weights", plan.replace(b"sm89", b"sm120")),
+            VariantPayload(CudaArch.SM89, cubin(89), b"weights", plan(CudaArch.SM89)),
+            VariantPayload(CudaArch.SM120, cubin(120), b"weights", plan(CudaArch.SM120)),
         ],
     )
     return 0

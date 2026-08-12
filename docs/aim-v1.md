@@ -50,3 +50,13 @@ also checks host platform, file and section integrity, schema and Runtime ABI.
 Session creation checks exact GPU architecture plus the CUDA Driver, CUDA
 Runtime, cuBLASLt and cuDNN range/ABI stored in the manifest. No compatibility
 fallback, PTX JIT, autotuning, or runtime weight conversion is permitted.
+
+## Static execution plan
+
+Each variant stores an `AIMPLN1\0` binary plan compiled from its `plan.json`.
+The plan fixes profile-specific tensor contracts, Kernel symbols, launch
+dimensions, argument bindings, arena size, and workspace size. Runtime does
+not parse JSON or infer a launch configuration on the deployment machine.
+
+The plan table layout and CUDA calling convention are specified in
+[Kernel ABI 1.0](kernel-abi-v1.md).

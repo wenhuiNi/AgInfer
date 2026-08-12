@@ -34,8 +34,8 @@ Python, ONNX Runtime, or TensorRT on the target.
   Hugging Face E4M3 FP8 with explicit scales.
 - **Integrity by default:** whole-file and per-section SHA-256 verification,
   bounds checks, alignment checks, and ABI validation.
-- **Native integration:** a lightweight C++20 loader and session API with
-  explicit `Status` results instead of exceptions.
+- **Native execution:** a C++20 Runtime loads CUBIN directly through the CUDA
+  Driver API and enqueues the static launch recipe on the caller's stream.
 
 ```text
 Hugging Face checkpoint ─┐
@@ -238,7 +238,16 @@ if (!session.ok()) {
 }
 
 auto target = session.value().GetTargetInfo();
+auto input_info = session.value().GetInputInfo();
+auto output_info = session.value().GetOutputInfo();
 auto workspace = session.value().GetRequiredWorkspace("default");
+
+// Allocate and populate device buffers from input_info/output_info.
+std::vector<aginfer::TensorView> inputs{/* populated TensorViews */};
+std::vector<aginfer::TensorView> outputs{/* populated TensorViews */};
+aginfer::RunOptions run_options;
+aginfer::CudaStream stream = nullptr;  // CUDA default stream, or a caller-owned stream.
+auto status = session.value().Enqueue(inputs, outputs, run_options, stream);
 ```
 
 During loading and session creation, AgInfer validates:
@@ -251,6 +260,9 @@ During loading and session creation, AgInfer validates:
 6. cuBLASLt and cuDNN ABIs
 
 Any mismatch returns a specific status code; no fallback is attempted.
+The first `Enqueue` initializes the selected CUBIN module and static device
+allocations. Kernel launches are then submitted asynchronously to the supplied
+stream; synchronization remains under caller control.
 
 ## Checkpoint and precision policy
 
@@ -277,8 +289,9 @@ Run `modelc --help` or `modelc compile --help` for the complete CLI reference.
 
 ## AIM format
 
-See [AIM schema 1.0](docs/aim-v1.md) for the binary layout, alignment rules,
-variant directory, checksums, and compatibility requirements.
+See [AIM schema 1.0](docs/aim-v1.md) for the container layout and
+[Kernel ABI 1.0](docs/kernel-abi-v1.md) for binary execution plans, tensor
+contracts, and CUDA launch arguments.
 
 ## Contributing
 

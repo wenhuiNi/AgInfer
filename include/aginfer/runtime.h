@@ -22,7 +22,6 @@ enum class StatusCode {
   kIncompatibleAbi,
   kCudaError,
   kOutOfMemory,
-  kUnimplemented,
 };
 
 class Status {
@@ -71,6 +70,15 @@ struct TensorView {
   std::size_t byte_size = 0;
   MemoryLocation location = MemoryLocation::kDevice;
   bool caller_owned = true;
+};
+
+struct TensorInfo {
+  std::string name;
+  DType dtype = DType::kFp32;
+  std::vector<std::int64_t> shape;
+  std::vector<std::int64_t> stride;
+  std::size_t byte_size = 0;
+  MemoryLocation location = MemoryLocation::kDevice;
 };
 
 struct RunOptions {
@@ -154,8 +162,8 @@ class Session {
   static StatusOr<Session> Create(Runtime& runtime, Model& model,
                                   const SessionOptions& options = {});
   TargetInfo GetTargetInfo() const;
-  std::vector<std::string> GetInputInfo() const;
-  std::vector<std::string> GetOutputInfo() const;
+  std::vector<TensorInfo> GetInputInfo() const;
+  std::vector<TensorInfo> GetOutputInfo() const;
   StatusOr<WorkspaceInfo> GetRequiredWorkspace(const std::string& profile) const;
   Status Enqueue(const std::vector<TensorView>& inputs,
                  const std::vector<TensorView>& outputs,

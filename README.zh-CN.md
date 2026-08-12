@@ -33,8 +33,8 @@ Runtime 或 TensorRT。
 - **严格保持 dtype：** 原生支持 FP32、FP16、BF16，以及带显式 scale 的
   ModelOpt Unified Hugging Face E4M3 FP8。
 - **默认完整性校验：** 校验整文件和各 section 的 SHA-256、范围、对齐及 ABI。
-- **原生集成：** 提供轻量 C++20 Loader 与 Session API，通过显式 `Status`
-  返回错误，不依赖异常。
+- **原生执行：** C++20 Runtime 通过 CUDA Driver API 直接加载 CUBIN，并在
+  调用方 stream 上提交静态 launch recipe。
 
 ```text
 Hugging Face checkpoint ─┐
@@ -232,7 +232,16 @@ if (!session.ok()) {
 }
 
 auto target = session.value().GetTargetInfo();
+auto input_info = session.value().GetInputInfo();
+auto output_info = session.value().GetOutputInfo();
 auto workspace = session.value().GetRequiredWorkspace("default");
+
+// 根据 input_info/output_info 分配并填充 device buffer。
+std::vector<aginfer::TensorView> inputs{/* 已填充的 TensorView */};
+std::vector<aginfer::TensorView> outputs{/* 已填充的 TensorView */};
+aginfer::RunOptions run_options;
+aginfer::CudaStream stream = nullptr;  // CUDA default stream，或调用方管理的 stream。
+auto status = session.value().Enqueue(inputs, outputs, run_options, stream);
 ```
 
 加载 AIM 和创建 Session 时，AgInfer 会依次校验：
@@ -245,6 +254,8 @@ auto workspace = session.value().GetRequiredWorkspace("default");
 6. cuBLASLt 与 cuDNN ABI
 
 任一条件不匹配都会返回对应的状态码，不进行 fallback。
+首次调用 `Enqueue` 时会初始化所选 CUBIN module 和静态 device allocation。
+之后的 Kernel 会异步提交到调用方提供的 stream，同步时机由调用方控制。
 
 ## Checkpoint 与精度规则
 
@@ -271,8 +282,8 @@ scale 推导或隐式 dtype 转换。
 
 ## AIM 格式
 
-[AIM schema 1.0](docs/aim-v1.md) 记录了二进制布局、对齐规则、variant
-directory、校验和及兼容性要求。
+[AIM schema 1.0](docs/aim-v1.md) 记录容器布局；[Kernel ABI 1.0](docs/kernel-abi-v1.md)
+记录二进制执行计划、Tensor contract 和 CUDA launch 参数。
 
 ## 参与贡献
 

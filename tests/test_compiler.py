@@ -7,6 +7,7 @@ from pathlib import Path
 from aginfer.compiler import CompileOptions, compile_model
 from aginfer.aim import AimReader
 from aginfer.errors import ValidationError
+from aginfer.plan import inspect_plan
 from aginfer.schema import CudaArch, Platform
 from tests.helpers import create_artifacts, create_checkpoint, create_profile
 
@@ -27,6 +28,11 @@ class CompilerTests(unittest.TestCase):
             self.assertEqual(info.manifest["checkpoint_dtypes"], ["F16"])
             self.assertFalse(info.manifest["deployment_features"]["ptx"])
             self.assertEqual(AimReader.read(output).tensors["count"], 1)
+            variant = info.variants[0]
+            with output.open("rb") as stream:
+                stream.seek(variant.plan.offset)
+                plan = stream.read(variant.plan.size)
+            self.assertEqual(inspect_plan(plan)["launch_count"], 1)
 
     def test_missing_verified_artifact_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

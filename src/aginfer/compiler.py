@@ -10,6 +10,7 @@ from .checkpoint import Checkpoint, collect_metadata, load_checkpoint, pack_weig
 from .aim import AimInfo, AimWriter, VariantPayload
 from .errors import ValidationError
 from .profiles import load_profile
+from .plan import compile_execution_plan
 from .schema import RUNTIME_ABI, CudaArch, Platform, ToolchainRange, validate_target
 
 @dataclass(frozen=True)
@@ -65,13 +66,13 @@ def compile_model(options: CompileOptions) -> AimInfo:
         kernels = _read_required(kernel_path, f"precompiled {arch.name_string} kernel bundle")
         plan = _load_object(plan_path, "execution plan")
         tactics = _load_object(tactic_path, "tactic database")
-        _validate_plan(plan, arch)
+        compiled_plan = compile_execution_plan(plan, arch, weight_size=len(weight_blob))
         _validate_tactics(tactics, arch)
         tactic_summaries[arch.name_string] = {
             "database_sha256": _sha256_file(tactic_path),
             "entry_count": len(tactics["tactics"]),
         }
-        variants.append(VariantPayload(arch, kernels, weight_blob, _canonical_json(plan)))
+        variants.append(VariantPayload(arch, kernels, weight_blob, compiled_plan.data))
 
     toolchain = _toolchain_from_artifacts(options.artifact_dir)
     manifest = {
@@ -125,19 +126,6 @@ def _toolchain_from_artifacts(root: Path) -> ToolchainRange:
     if min(result.cuda_driver_min, result.cublaslt_abi, result.cudnn_abi) <= 0:
         raise ValidationError("toolchain ABI values must be positive")
     return result
-
-
-def _validate_plan(plan: dict[str, Any], arch: CudaArch) -> None:
-    if plan.get("cuda_arch") != arch.name_string:
-        raise ValidationError(f"execution plan target must be exactly {arch.name_string}")
-    required = ("arena_bytes", "workspace_bytes", "shape_dispatch", "cuda_graph_templates")
-    missing = [key for key in required if key not in plan]
-    if missing:
-        raise ValidationError(f"{arch.name_string} execution plan is missing: {', '.join(missing)}")
-    if int(plan["arena_bytes"]) < 0 or int(plan["workspace_bytes"]) < 0:
-        raise ValidationError("execution plan memory sizes cannot be negative")
-    if not isinstance(plan["shape_dispatch"], list) or not plan["shape_dispatch"]:
-        raise ValidationError("execution plan needs a non-empty shape dispatch table")
 
 
 def _validate_tactics(value: dict[str, Any], arch: CudaArch) -> None:
