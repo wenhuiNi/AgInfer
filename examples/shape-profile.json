@@ -1,0 +1,15 @@
+{
+  "profiles": [
+    {
+      "name": "default",
+      "batch": 1,
+      "sequence_length": {"min": 16, "opt": 128, "max": 512},
+      "image_height": {"min": 224, "opt": 448, "max": 448},
+      "image_width": {"min": 224, "opt": 448, "max": 448},
+      "image_count": {"min": 1, "opt": 2, "max": 4},
+      "state_length": {"min": 7, "opt": 32, "max": 64},
+      "action_horizon": {"min": 1, "opt": 16, "max": 32}
+    }
+  ],
+  "default_denoising": {"steps": 4}
+}

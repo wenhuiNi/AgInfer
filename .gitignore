@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.o
+*.a
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+*.aim
+PLAN.md
+
+
