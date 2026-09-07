@@ -15,6 +15,7 @@ from ..lowering.memory import replan_memory_for_commands
 from ..providers.build_binding import BuildBinding, LinearBuildBinding
 from ..providers.rounded_attention import RoundedAttentionPayload
 from ..providers.projection_split import lower_projection_splits
+from ..providers.state_update import lower_state_updates
 from ..schema import CudaArch
 
 
@@ -63,6 +64,7 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms):
         raise ValidationError("attention algorithms belong to a different CUBIN")
     inventory = build_lowering_inventory(program)
     schedule = build_execution_schedule(program)
+    resident = any(op.opcode == "state_update" for op in schedule.ops)
     memory = build_memory_plan(schedule)
 
     def binding(problem, payload_type, provider_id=2):
@@ -114,7 +116,11 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms):
             "patch": call(p.lower_patch_projection_commands, patch),
         }
         for name, problem, payload_type, fn in specs:
+            if resident and name in {"kv_pack", "kv_store"}:
+                continue
             lowered[name] = call(fn, binding(problem, payload_type))
+        if resident:
+            lowered["state_update"] = lower_state_updates(schedule, len(cubin), digest)
         split = lower_projection_splits(schedule, len(cubin), digest)
         if split.commands:
             lowered["projection_split"] = split

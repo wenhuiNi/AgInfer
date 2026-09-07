@@ -283,6 +283,7 @@ def _classify(
         "slice",
         "state_read",
         "state_write",
+        "state_update",
         "transpose",
     }:
         return LoweringKind.MEMORY, RequirementStatus.REQUIRED, None

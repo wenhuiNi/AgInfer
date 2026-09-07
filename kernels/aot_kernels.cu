@@ -8,6 +8,7 @@
 #include "kv_pack.cu"
 #include "patch_projection.cu"
 #include "projection_split.cu"
+#include "state_update.cu"
 #include "prefix_kv_store.cu"
 #include "prefix_input.cu"
 #include "pointwise.cu"

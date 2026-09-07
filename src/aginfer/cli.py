@@ -34,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--output", type=Path, required=True)
     compile_parser.add_argument("--scratch", type=Path)
     compile_parser.add_argument("--selection-report", type=Path)
+    compile_parser.add_argument("--resident-kv", action="store_true",
+        help="reuse prefix KV backing and overwrite only the current suffix")
 
     selection_parser = commands.add_parser("select-algorithms", help="select fixed algorithms offline with native cuBLASLt AlgoCheck")
     selection_parser.add_argument("source", type=Path)
@@ -41,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     selection_parser.add_argument("--selector", type=Path, required=True)
     selection_parser.add_argument("--output", type=Path, required=True)
     selection_parser.add_argument("--report", type=Path, required=True)
+    selection_parser.add_argument("--resident-kv", action="store_true",
+        help="select against the resident prefix/suffix cache program")
     selection_parser.add_argument("--fuse-projections", action="store_true",
         help="offline merge three shared-input small-row BF16 projections")
     compile_parser.add_argument("--fuse-projections", action="store_true",
@@ -79,12 +83,12 @@ def main(argv: list[str] | None = None) -> int:
             output = compile_source(args.source, output=args.output, cubin_path=args.cubin,
                 kernel_record_path=args.kernel_build_record, algorithms_path=args.algorithms,
                 frontend=args.frontend, scratch=args.scratch, selection_report_path=args.selection_report,
-                fuse_projections=args.fuse_projections)
+                fuse_projections=args.fuse_projections, resident_kv=args.resident_kv)
         elif args.command == "select-algorithms":
             from .compiler.selection import select_source_algorithms
             output = select_source_algorithms(args.source, cubin_path=args.cubin, selector_path=args.selector,
                 output=args.output, report_path=args.report, workspace_limit=args.workspace_limit,
-                fuse_projections=args.fuse_projections)
+                fuse_projections=args.fuse_projections, resident_kv=args.resident_kv)
         elif args.command == "verify":
             from .compiler.verify import verify_artifact
             output = verify_artifact(args.aim, require_build_record=args.require_build_record)

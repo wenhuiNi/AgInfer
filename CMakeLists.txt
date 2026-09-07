@@ -25,6 +25,7 @@ add_library(aginfer_runtime STATIC
   cpp/kv_pack_payload.cc
   cpp/patch_projection_payload.cc
   cpp/projection_split_payload.cc
+  cpp/state_update_payload.cc
   cpp/prefix_input_payload.cc
   cpp/prefix_kv_store_payload.cc
   cpp/layer_norm_payload.cc
@@ -61,6 +62,7 @@ if(AGINFER_ENABLE_CUDA)
     cpp/providers/aot_kv_pack.cc
     cpp/providers/patch_projection.cc
     cpp/providers/projection_split.cc
+    cpp/providers/state_update.cc
     cpp/providers/aot_prefix_input.cc
     cpp/providers/aot_prefix_kv_store.cc
     cpp/providers/aot_pointwise.cc
@@ -128,7 +130,7 @@ if(AGINFER_ENABLE_CUDA)
     DEPENDS kernels/aot_kernels.cu kernels/action_slice.cu kernels/activation.cu kernels/adaptive_rms_norm.cu
             kernels/cast.cu kernels/layer_norm.cu
             kernels/kv_pack.cu kernels/patch_projection.cu kernels/pointwise.cu kernels/prefix_input.cu
-            kernels/prefix_kv_store.cu kernels/projection_split.cu
+            kernels/prefix_kv_store.cu kernels/projection_split.cu kernels/state_update.cu
             kernels/rms_norm.cu kernels/rope.cu kernels/rounded_attention.cu
             kernels/suffix_metadata.cu
             kernels/time_embedding.cu
@@ -171,7 +173,27 @@ if(BUILD_TESTING)
   target_link_libraries(projection_split_test PRIVATE aginfer_runtime)
   add_dependencies(projection_split_test projection_split_fixture)
   add_test(NAME projection_split_test COMMAND projection_split_test ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_state_update_fixture.py
+      ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin
+    DEPENDS tests/make_state_update_fixture.py src/aginfer/providers/state_update.py VERBATIM)
+  add_custom_target(state_update_fixture DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin)
+  add_executable(state_update_test tests/state_update_test.cc)
+  target_compile_features(state_update_test PRIVATE cxx_std_20)
+  target_include_directories(state_update_test PRIVATE cpp)
+  target_link_libraries(state_update_test PRIVATE aginfer_runtime)
+  add_dependencies(state_update_test state_update_fixture)
+  add_test(NAME state_update_test COMMAND state_update_test ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin)
   if(AGINFER_ENABLE_CUDA AND AGINFER_BUILD_CUDA_TESTS AND AGINFER_CUDA_ARCH STREQUAL "120")
+    add_executable(state_update_cuda_test tests/state_update_test.cc)
+    target_compile_definitions(state_update_cuda_test PRIVATE TEST_CUDA=1)
+    target_compile_features(state_update_cuda_test PRIVATE cxx_std_20)
+    target_include_directories(state_update_cuda_test PRIVATE cpp)
+    target_link_libraries(state_update_cuda_test PRIVATE aginfer_runtime CUDA::cudart)
+    add_dependencies(state_update_cuda_test state_update_fixture aginfer_aot_kernels)
+    add_test(NAME state_update_cuda_test COMMAND state_update_cuda_test
+      ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin ${AGINFER_AOT_CUBIN})
     add_executable(projection_split_cuda_test tests/projection_split_test.cc)
     target_compile_definitions(projection_split_cuda_test PRIVATE TEST_CUDA=1)
     target_compile_features(projection_split_cuda_test PRIVATE cxx_std_20)

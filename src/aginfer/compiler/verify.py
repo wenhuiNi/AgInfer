@@ -11,6 +11,7 @@ from ..executable import parse_executable_plan, EXECUTABLE_PLAN_MAGIC
 from ..lowering.command import CommandTag
 from ..providers.rounded_attention import RoundedAttentionPayload
 from ..providers.projection_split import ProjectionSplitPayload
+from ..providers.state_update import StateUpdatePayload
 
 
 def decode_command_payload(command):
@@ -19,7 +20,7 @@ def decode_command_payload(command):
         2: (p.CudaKernelPayload, p.LayerNormPayload, p.RmsNormPayload, p.RopePayload,
             p.AdaptiveRmsNormPayload, p.KvPackPayload, p.PrefixKvStorePayload,
             p.PrefixInputPayload, p.SuffixMetadataPayload, p.TimeEmbeddingPayload,
-            p.ActionSlicePayload, p.VisionAttentionPayload, ProjectionSplitPayload),
+            p.ActionSlicePayload, p.VisionAttentionPayload, ProjectionSplitPayload, StateUpdatePayload),
         3: (p.FlashInferAttentionPayload, p.FlashInferPrefixAttentionPayload),
         4: (p.PatchProjectionPayload,),
         5: (RoundedAttentionPayload,),

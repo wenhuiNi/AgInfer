@@ -666,6 +666,19 @@ def _execute_op(
     if op.opcode == "state_read":
         _store(op, states[str(op.attribute("state"))], values, program, symbols)
         return
+    if op.opcode == "state_update":
+        name = str(op.attribute("state"))
+        old, source = states[name], inputs[0]
+        axis, start = int(op.attribute("axis")), int(op.attribute("start"))
+        inner = math.prod(old.shape[axis + 1:])
+        outer = math.prod(old.shape[:axis])
+        width, stride = source.shape[axis] * inner, old.shape[axis] * inner
+        data = list(old.data)
+        for row in range(outer):
+            offset = row * stride + start * inner
+            data[offset:offset + width] = source.data[row * width:(row + 1) * width]
+        states[name] = Tensor(old.dtype, old.shape, tuple(data))
+        return
     if op.opcode == "state_write":
         states[str(op.attribute("state"))] = inputs[0]
         return

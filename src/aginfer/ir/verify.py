@@ -52,6 +52,7 @@ _SUPPORTED_OPS = frozenset(
         "sinusoidal_embedding",
         "state_read",
         "state_write",
+        "state_update",
     }
 )
 
@@ -652,6 +653,20 @@ def _verify_op(
         state = _state_attribute(op, states, label)
         if op.outputs[0].type != state.type:
             raise ValidationError(f"{label}: state_read output type does not match the state")
+        return
+    if op.opcode == "state_update":
+        _signature(op, inputs=1, outputs=0, attributes={"state", "axis", "start"}, label=label)
+        state = _state_attribute(op, states, label)
+        source, target = inputs[0], state.type
+        axis, start = op.attribute("axis"), op.attribute("start")
+        if (state.access != StateAccess.READ_WRITE or type(axis) is not int
+                or not 0 <= axis < target.rank or type(start) is not int or start < 0
+                or source.rank != target.rank or source.dtype != target.dtype
+                or source.layout != target.layout or source.device != target.device
+                or any(type(n) is not int for n in source.shape + target.shape)
+                or any(a != b for i, (a, b) in enumerate(zip(source.shape, target.shape)) if i != axis)
+                or start + source.shape[axis] > target.shape[axis]):
+            raise ValidationError(f"{label}: invalid bounded state_update slice")
         return
     if op.opcode == "state_write":
         _signature(op, inputs=1, outputs=0, attributes={"state"}, label=label)

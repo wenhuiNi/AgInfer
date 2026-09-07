@@ -8,6 +8,7 @@
 #include "providers/cublaslt_linear.h"
 #include "providers/patch_projection.h"
 #include "providers/projection_split.h"
+#include "providers/state_update.h"
 #include "providers/aot_prefix_input.h"
 #include "providers/aot_cast.h"
 #include "providers/aot_pointwise.h"
@@ -118,6 +119,10 @@ Status PrepareProviderCommand(const CommandRecordView& record,
   if (record.provider_id != 2 ||
       record.tag != (Magic(payload, "AIVAT1\0") ? CommandTag::kAttention : CommandTag::kCudaKernel))
     return Refused("no delivered provider for this command ID/tag");
+  if (Magic(payload, "AISTU1\0")) {
+    if (!Access(b, "rrww")) return Refused("state update operand contract mismatch");
+    return PrepareStateUpdate(payload, b, module, output);
+  }
   if (Magic(payload, "AIPSP1\0")) {
     if (!Access(b, "rwww")) return Refused("projection split operand contract mismatch");
     return PrepareProjectionSplit(payload, b, module, output);

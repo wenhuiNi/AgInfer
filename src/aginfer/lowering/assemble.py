@@ -109,7 +109,7 @@ def order_command_placements(
                     op = schedule.ops[execution]
                     if (states.get(dict(op.attributes).get("state")) == root
                         and ((read and op.opcode == "state_read")
-                             or (write and op.opcode == "state_write"))):
+                             or (write and op.opcode in {"state_write", "state_update"}))):
                         events.add(execution)
                 producer = schedule.values[operand.value_id].producer
                 if read and producer is not None and schedule.ops[producer].opcode == "state_read":

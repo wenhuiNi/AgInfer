@@ -300,7 +300,7 @@ def build_execution_schedule(
             )
             for output, global_id in zip(op.outputs, output_ids):
                 local_values[output.value_id] = global_id
-            if op.opcode == "state_write":
+            if op.opcode in {"state_write", "state_update"}:
                 state_name = str(op.attribute("state"))
                 if state_name not in states_by_name:
                     raise AssertionError("verified state write lost its state")

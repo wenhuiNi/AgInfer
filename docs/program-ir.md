@@ -25,6 +25,10 @@ bounded binary contract after provider and compiler requirements are known.
   range in the program `ShapeDomain`.
 - State is declared separately from function SSA values. `state_read` produces
   the declared type; `state_write` requires that type and `read_write` access.
+  `state_update(input) {state, axis, start}` overwrites one bounded slice while
+  preserving the other elements. It requires a read-write state, static shapes,
+  matching dtype/device/layout/rank and all non-sliced dimensions. It is an
+  explicit state effect for command ordering, not a temporary-buffer hint.
 - The initial generic ops are `constant`, `constant_ref`, `cast`, `add`, `mul`, `logical_and`,
   `cumulative_sum`,
   `matmul`, `linear`, `reshape`, `broadcast_in_dim`, `transpose`, `concat`, static `slice`, `reduce_sum`,

@@ -44,7 +44,7 @@ def validate_kernel_record(record, cubin):
 
 
 def compile_source(source_path, *, output, cubin_path, kernel_record_path, algorithms_path,
-                   frontend="pi05", scratch=None, selection_report_path=None, fuse_projections=False):
+                   frontend="pi05", scratch=None, selection_report_path=None, fuse_projections=False, resident_kv=False):
     if frontend != "pi05":
         raise ValidationError("no delivered source frontend for this request")
     output = Path(output)
@@ -68,6 +68,11 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
         fusion = transform(program)
         program = fusion.program
         constants = FusionConstantView(source.constants, fusion.constants)
+    resident = None
+    if resident_kv:
+        from .resident_kv import make_kv_resident
+        resident = make_kv_resident(program)
+        program = resident.program
     selection_report = None
     if selection_report_path is not None:
         from .selection import validate_selection_report
@@ -104,6 +109,9 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
             "validation": {"status": "not_run", "capture_verified": False, "performance_claim": None}}
         if fusion is not None:
             build["projection_fusion"] = fusion.report()
+        if resident is not None:
+            build["resident_kv"] = resident.report()
+        if fusion is not None or resident is not None:
             build["source_program_sha256"] = hashlib.sha256(dump_program(imported.program).encode()).hexdigest()
         if selection_report is not None:
             build["algorithm_selection"] = selection_report
