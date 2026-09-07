@@ -734,7 +734,7 @@ Status CreateSession(ai_runtime* runtime, ai_model* model,
     Status status = ValidateStruct(options, sizeof(ai_session_options),
                                    "ai_session_options");
     if (!status.ok()) return status;
-    if ((options->flags & ~AI_SESSION_CUDA_GRAPH) != 0) {
+    if (options->flags != 0) {
       return Error(StatusCode::kInvalidArgument,
                    "ai_session_options has unknown flags");
     }
@@ -770,12 +770,10 @@ Status CreateSession(ai_runtime* runtime, ai_model* model,
     if (!status.ok()) return status;
     session->executable = std::make_unique<aginfer::internal::ExecutableSession>(
         executable_plan, model->data + selected->kernel_offset, selected->kernel_size,
-        model->data + selected->weight_offset, (selected_options.flags & AI_SESSION_CUDA_GRAPH) != 0);
+        model->data + selected->weight_offset);
     *output = std::move(session);
     return Status::Ok();
   }
-  if (selected_options.flags & AI_SESSION_CUDA_GRAPH)
-    return Error(StatusCode::kInvalidArgument, "CUDA Graph mode requires executable-plan v2");
   status = aginfer::internal::ParsePlan(
       model->data + selected->plan_offset,
       static_cast<std::size_t>(selected->plan_size), selected->arch,

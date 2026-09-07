@@ -94,10 +94,15 @@ synchronize. Vendor libraries can still perform cached kernel-handle queries;
 these are not a promise of lookup-free third-party internals. Prepare-time
 capture preflight alone is not a deployment CUDA Graph replay mode.
 
-### Opt-in full-model CUDA Graph replay (v2)
+### Default full-model CUDA Graph replay (v2)
 
-Set `ai_session_options.flags = AI_SESSION_CUDA_GRAPH` before session creation.
-The default (`flags=0`) remains direct submission; v1 plans reject this flag.
+Public v2 sessions always use full-model CUDA Graph replay. Pass `nullptr` options
+or use `ai_session_options_init`; no graph option is needed. Session `flags` are
+reserved and must be zero. The experimental `AI_SESSION_CUDA_GRAPH` opt-in flag
+has been removed: callers of that short-lived API must remove the flag assignment
+and rebuild. Nonzero flags fail explicitly rather than silently changing mode.
+Legacy execution-plan v1 still uses its original direct-kernel path.
+The v2 direct-submission path is retained only as an internal diagnostic facility.
 No AIM rewrite, numerical algorithm change, or runtime tactic search is involved.
 After normal library preflight, Prepare records **all** commands, instantiates
 the resulting graph and uploads it on a private nonblocking stream. It waits
@@ -109,16 +114,28 @@ Enqueue submits one `cudaGraphLaunch` on the caller stream. It does not loop ove
 commands even for accounting: logical provider counts are derived when queried.
 `ai_session_get_execution_info` includes logical commands submitted via graph
 launches. `ai_session_get_cuda_graph_info` separately reports whether graph mode
-was requested, whether instantiation succeeded, captured node count, and successful
+is enabled, whether instantiation succeeded, captured node count, and successful
 launch submissions. These are host-side receipts, not GPU completion or numerical
 validation. Capture, instantiation or launch failure is returned, never silently
 replaced by direct execution. The artifact's offline `capture_safe`/validation
-records are not upgraded by this explicitly requested runtime capture attempt.
+records are not upgraded by this runtime capture attempt.
+
+Graph replay does not replace or prevent offline constant folding, fusion, layout
+planning, precision validation, or tactic selection. A changed plan/new session
+gets a new graph. Future providers must support capture without host-side
+input-dependent work. All optimization comparisons must use matching graph
+policies: launch-overhead reductions cannot be counted twice. The startup and
+fixed-address constraints below still apply; capture failures are errors, not an
+automatic performance fallback.
 
 IO addresses stay frozen; update the contents at those addresses for new requests.
 The caller must order IO writes and inference on streams correctly and wait for
 outstanding GPU work before destroying sessions or buffers. A session is not
 concurrently reusable; separate sessions own separate graphs/state/workspaces.
+For example, an input upload on the default stream is not automatically ordered
+before a graph on a nonblocking stream. Use the same stream for async upload and
+enqueue, establish an event dependency, or finish the upload explicitly first;
+pageable-host `cudaMemcpy` returning is not a substitute for that ordering.
 Internal graph mode rejects enqueue into an externally capturing stream, so an
 outer recording cannot be mistaken for an executed internal graph submission.
 Graph resources are destroyed before their commands, memory and CUBIN module.

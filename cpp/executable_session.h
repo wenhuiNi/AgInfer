@@ -11,7 +11,7 @@ namespace aginfer::internal {
 class ExecutableSession {
  public:
   ExecutableSession(const ParsedExecutablePlan& plan, const std::uint8_t* kernels,
-      std::uint64_t kernel_bytes, const std::uint8_t* weights, bool cuda_graph = false);
+      std::uint64_t kernel_bytes, const std::uint8_t* weights, bool cuda_graph = true);
   ~ExecutableSession();
   Status Bind(std::uint32_t port_id, ai_port_kind kind, const ai_tensor_view& view);
   Status Prepare();
@@ -36,7 +36,8 @@ class ExecutableSession {
   std::vector<std::uint32_t> provider_ids_;
   std::vector<std::uint64_t> submissions_;
   std::uint64_t enqueues_ = 0;
-  bool cuda_graph_ = false;
+  // Direct submission is retained only for internal diagnostics, not public configuration.
+  bool cuda_graph_ = true;
   void* graph_exec_ = nullptr;
   std::uint64_t graph_nodes_ = 0, graph_launches_ = 0;
   bool prepared_ = false;

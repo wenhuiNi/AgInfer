@@ -89,12 +89,8 @@ typedef struct ai_session_options {
   uint32_t struct_size;
   uint32_t struct_version;
   uint32_t profile_index;
-  uint32_t flags;
+  uint32_t flags;  // Reserved; must be zero. V2 sessions always use CUDA Graph.
 } ai_session_options;
-
-// Opt-in, executable-plan v2 only. Prepare captures the fixed plan; failure
-// is an error, never a silent switch to direct submission. flags=0 is unchanged.
-enum { AI_SESSION_CUDA_GRAPH = 1u };
 
 typedef struct ai_tensor_view {
   uint32_t struct_size;

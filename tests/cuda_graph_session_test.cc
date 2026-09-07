@@ -4,16 +4,18 @@
 #include <iostream>
 #include <stdexcept>
 
-void Check(bool value) { if (!value) throw std::runtime_error("CUDA graph contract failed"); }
+void CheckAt(bool value, int line) {
+  if (!value) throw std::runtime_error("CUDA graph contract failed at line " + std::to_string(line));
+}
+#define Check(value) CheckAt((value), __LINE__)
 void Ai(ai_status status) { if (status) throw std::runtime_error(ai_last_error()); }
 void Cu(cudaError_t status) { if (status) throw std::runtime_error(cudaGetErrorString(status)); }
 struct Session {
   ai_session* session = nullptr;
   std::array<float*, 3> buffers{};
-  Session(ai_runtime* runtime, ai_model* model, bool graph) {
+  Session(ai_runtime* runtime, ai_model* model, bool explicit_options) {
     ai_session_options options; ai_session_options_init(&options);
-    options.flags = graph ? AI_SESSION_CUDA_GRAPH : 0;
-    Ai(ai_session_create(runtime, model, &options, &session));
+    Ai(ai_session_create(runtime, model, explicit_options ? &options : nullptr, &session));
     for (unsigned p = 0; p < 3; ++p) {
       Cu(cudaMalloc(reinterpret_cast<void**>(&buffers[p]), 1024));
       Ai(Bind(p, buffers[p]));
@@ -29,11 +31,16 @@ struct Session {
   void Fill(unsigned p, float value) {
     std::array<float, 256> data; data.fill(value);
     Cu(cudaMemcpy(buffers[p], data.data(), 1024, cudaMemcpyHostToDevice));
+    // Pageable H2D may return after staging, before the device copy completes.
+    // Run uses a nonblocking stream; explicitly finish input upload first.
+    Cu(cudaStreamSynchronize(nullptr));
   }
   void Output(float expected) {
     std::array<float, 256> data;
     Cu(cudaMemcpy(data.data(), buffers[2], 1024, cudaMemcpyDeviceToHost));
-    for (float value : data) Check(value == expected);
+    for (float value : data)
+      if (value != expected) throw std::runtime_error("output " + std::to_string(value) +
+          " differs from " + std::to_string(expected));
   }
   void Run(cudaStream_t stream, float expected) {
     Ai(ai_session_enqueue(session, stream)); Cu(cudaStreamSynchronize(stream)); Output(expected);
@@ -59,23 +66,23 @@ int main(int argc, char** argv) { try {
   Ai(ai_model_load(argv[2], &bad));
   cudaStream_t stream; Cu(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   {
-    Session direct(runtime, model, false), graph(runtime, model, true), peer(runtime, model, true);
-    for (auto arm : {&direct, &graph, &peer}) {
+    Session defaults(runtime, model, false), graph(runtime, model, true), peer(runtime, model, true);
+    for (auto arm : {&defaults, &graph, &peer}) {
       arm->Fill(0, 3); arm->Fill(1, 5); arm->Fill(2, -123);
       Ai(ai_session_prepare(arm->session)); arm->Output(-123);
       Ai(ai_session_prepare(arm->session)); arm->Output(-123);
       Check(arm->Bind(0, arm->buffers[1]) == AI_STATUS_INVALID_STATE);
       Ai(arm->Bind(0, arm->buffers[0]));
     }
-    direct.Ledger(0, false); graph.Ledger(0, true); peer.Ledger(0, true);
-    direct.Run(stream, 13); graph.Run(stream, 13); graph.Run(nullptr, 13);
-    graph.Fill(0, -7); direct.Fill(0, -7);
-    direct.Run(stream, 3); graph.Run(stream, 3); peer.Run(stream, 13);
+    defaults.Ledger(0, true); graph.Ledger(0, true); peer.Ledger(0, true);
+    defaults.Run(stream, 13); graph.Run(stream, 13); graph.Run(nullptr, 13);
+    graph.Fill(0, -7); defaults.Fill(0, -7);
+    defaults.Run(stream, 3); graph.Run(stream, 3); peer.Run(stream, 13);
     graph.Fill(0, 3); graph.Run(stream, 13);
     Cu(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
     Check(ai_session_enqueue(graph.session, stream) == AI_STATUS_INVALID_STATE);
     cudaGraph_t outer; Cu(cudaStreamEndCapture(stream, &outer)); Cu(cudaGraphDestroy(outer));
-    graph.Ledger(4, true); direct.Ledger(2, false); peer.Ledger(1, true);
+    graph.Ledger(4, true); defaults.Ledger(2, true); peer.Ledger(1, true);
     graph.Run(stream, 13); graph.Ledger(5, true);
     Session invalid(runtime, bad, true); invalid.Fill(2, -123);
     Check(ai_session_prepare(invalid.session) != AI_STATUS_OK); invalid.Output(-123);
@@ -86,6 +93,6 @@ int main(int argc, char** argv) { try {
     Check(failed.enabled && !failed.instantiated && !failed.node_count && !failed.launches);
   }
   Cu(cudaStreamDestroy(stream)); ai_model_destroy(bad); ai_model_destroy(model); ai_runtime_destroy(runtime);
-  std::cout << "graph replay, direct parity, refresh/isolation, prepare poison, ledger and refusal contracts passed\n";
+  std::cout << "default/zero-option graph replay, refresh/isolation, prepare poison, ledger and refusal contracts passed\n";
   return 0;
 } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; } }

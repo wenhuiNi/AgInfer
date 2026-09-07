@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
       execution.enqueues || execution.commands_submitted || execution.fallback_count) return 10;
   if (ai_session_get_execution_info(session, 99, &execution) != AI_STATUS_INVALID_ARGUMENT) return 11;
   ai_cuda_graph_info graph; ai_cuda_graph_info_init(&graph);
-  if (ai_session_get_cuda_graph_info(session, &graph) || graph.enabled || graph.instantiated ||
+  if (ai_session_get_cuda_graph_info(session, &graph) || graph.enabled != 1 || graph.instantiated ||
       graph.node_count || graph.launches) return 12;
   if (ai_session_get_cuda_graph_info(nullptr, &graph) != AI_STATUS_INVALID_ARGUMENT ||
       ai_session_get_cuda_graph_info(session, nullptr) != AI_STATUS_INVALID_ARGUMENT) return 13;
@@ -43,7 +43,10 @@ int main(int argc, char** argv) {
   ai_session* candidate = nullptr; ai_session_options graph_options; ai_session_options_init(&graph_options);
   graph_options.flags = 2;
   if (ai_session_create(runtime, model, &graph_options, &candidate) != AI_STATUS_INVALID_ARGUMENT || candidate) return 16;
-  graph_options.flags = AI_SESSION_CUDA_GRAPH;
+  // The former opt-in bit is now reserved, not silently interpreted as direct execution.
+  graph_options.flags = 1;
+  if (ai_session_create(runtime, model, &graph_options, &candidate) != AI_STATUS_INVALID_ARGUMENT || candidate) return 19;
+  graph_options.flags = 0;
   if (ai_session_create(runtime, model, &graph_options, &candidate)) return 17;
   ai_cuda_graph_info_init(&graph);
   if (ai_session_get_cuda_graph_info(candidate, &graph) || graph.enabled != 1 || graph.instantiated ||

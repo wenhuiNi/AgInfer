@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
   status = aginfer::Session::Create(runtime, model, nullptr, &session);
   if (status != AI_STATUS_OK) return 5;
   ai_session_options graph_options; ai_session_options_init(&graph_options);
-  graph_options.flags = AI_SESSION_CUDA_GRAPH;
+  graph_options.flags = 1;  // Reserved for both v1 and v2; legacy v1 stays direct.
   ai_session* rejected = nullptr;
   if (ai_session_create(runtime.get(), model.get(), &graph_options, &rejected) != AI_STATUS_INVALID_ARGUMENT || rejected)
     return 7;
