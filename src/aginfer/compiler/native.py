@@ -14,6 +14,7 @@ from ..lowering import (build_execution_schedule, build_lowering_inventory,
 from ..lowering.memory import replan_memory_for_commands
 from ..providers.build_binding import BuildBinding, LinearBuildBinding
 from ..providers.rounded_attention import RoundedAttentionPayload
+from ..providers.projection_split import lower_projection_splits
 from ..schema import CudaArch
 
 
@@ -114,6 +115,9 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms):
         }
         for name, problem, payload_type, fn in specs:
             lowered[name] = call(fn, binding(problem, payload_type))
+        split = lower_projection_splits(schedule, len(cubin), digest)
+        if split.commands:
+            lowered["projection_split"] = split
         for index, ((problem, fn), payload) in enumerate(zip(attention, algorithms.attention)):
             lowered[f"attention_{index}"] = call(fn, BuildBinding((problem,), (payload,), 5))
         superseded = set().union(*(set(lowered[name].fused_execution_indices) for name in ("adaptive", "suffix", "prefix")))

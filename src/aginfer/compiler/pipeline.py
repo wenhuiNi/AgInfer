@@ -44,7 +44,7 @@ def validate_kernel_record(record, cubin):
 
 
 def compile_source(source_path, *, output, cubin_path, kernel_record_path, algorithms_path,
-                   frontend="pi05", scratch=None, selection_report_path=None):
+                   frontend="pi05", scratch=None, selection_report_path=None, fuse_projections=False):
     if frontend != "pi05":
         raise ValidationError("no delivered source frontend for this request")
     output = Path(output)
@@ -62,20 +62,26 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
     algorithms = FixedAlgorithms.from_dict(selection)
     source = open_source_package(str(source_path), offline=True)
     imported = Pi05SourceFrontend().import_program(source)
+    program, constants, fusion = imported.program, source.constants, None
+    if fuse_projections:
+        from .projection_fusion import fuse_projections as transform, FusionConstantView
+        fusion = transform(program)
+        program = fusion.program
+        constants = FusionConstantView(source.constants, fusion.constants)
     selection_report = None
     if selection_report_path is not None:
         from .selection import validate_selection_report
         selection_report = validate_selection_report(read_json(selection_report_path), selection, cubin,
-            hashlib.sha256(dump_program(imported.program).encode()).hexdigest())
+            hashlib.sha256(dump_program(program).encode()).hexdigest())
     source_files = {asset.path: file_identity(source.assets.root / asset.path) for asset in source.manifest.assets}
-    inventory, schedule, memory, commands, literals, capabilities = lower_native_program(imported.program, cubin, algorithms)
+    inventory, schedule, memory, commands, literals, capabilities = lower_native_program(program, cubin, algorithms)
     with tempfile.TemporaryDirectory(prefix="aginfer-compile-", dir=scratch) as temporary:
         root = Path(temporary)
         # Freeze the exact kernel bytes read above against concurrent source edits.
         frozen_cubin = root / "module.cubin"
         frozen_cubin.write_bytes(cubin)
         weights = pack_command_weights(root / "weights.bin", schedule, memory, inventory, commands,
-            constants=source.constants, literal_materialization=literals)
+            constants=constants, literal_materialization=literals)
         plan = compile_executable_plan(schedule, memory, commands, weights.spans, weights_bytes=weights.byte_size)
         plan_path = root / "plan.bin"
         plan_path.write_bytes(plan.data)
@@ -87,7 +93,7 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
             "compiler": compiler_identity(), "python": platform.python_version(),
             "source_files": source_files, "kernel_build": kernel_record,
             "fixed_algorithms": selection,
-            "program_sha256": hashlib.sha256(dump_program(imported.program).encode()).hexdigest(),
+            "program_sha256": hashlib.sha256(dump_program(program).encode()).hexdigest(),
             "inventory_sha256": hashlib.sha256(dump_lowering_inventory(inventory).encode()).hexdigest(),
             "schedule_sha256": hashlib.sha256(dump_execution_schedule(schedule).encode()).hexdigest(),
             "memory_sha256": hashlib.sha256(dump_memory_plan(memory).encode()).hexdigest(),
@@ -96,6 +102,9 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
             "weights": {"bytes": weights.byte_size, "sha256": weights.sha256},
             "capabilities": cap_records,
             "validation": {"status": "not_run", "capture_verified": False, "performance_claim": None}}
+        if fusion is not None:
+            build["projection_fusion"] = fusion.report()
+            build["source_program_sha256"] = hashlib.sha256(dump_program(imported.program).encode()).hexdigest()
         if selection_report is not None:
             build["algorithm_selection"] = selection_report
         manifest = {"status": "unvalidated_candidate", "build": build, "build_sha256": digest(build)}

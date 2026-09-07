@@ -7,6 +7,7 @@
 #include "layer_norm.cu"
 #include "kv_pack.cu"
 #include "patch_projection.cu"
+#include "projection_split.cu"
 #include "prefix_kv_store.cu"
 #include "prefix_input.cu"
 #include "pointwise.cu"

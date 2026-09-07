@@ -24,6 +24,7 @@ add_library(aginfer_runtime STATIC
   cpp/flashinfer_attention_payload.cc
   cpp/kv_pack_payload.cc
   cpp/patch_projection_payload.cc
+  cpp/projection_split_payload.cc
   cpp/prefix_input_payload.cc
   cpp/prefix_kv_store_payload.cc
   cpp/layer_norm_payload.cc
@@ -59,6 +60,7 @@ if(AGINFER_ENABLE_CUDA)
     cpp/providers/aot_layer_norm.cc
     cpp/providers/aot_kv_pack.cc
     cpp/providers/patch_projection.cc
+    cpp/providers/projection_split.cc
     cpp/providers/aot_prefix_input.cc
     cpp/providers/aot_prefix_kv_store.cc
     cpp/providers/aot_pointwise.cc
@@ -126,7 +128,7 @@ if(AGINFER_ENABLE_CUDA)
     DEPENDS kernels/aot_kernels.cu kernels/action_slice.cu kernels/activation.cu kernels/adaptive_rms_norm.cu
             kernels/cast.cu kernels/layer_norm.cu
             kernels/kv_pack.cu kernels/patch_projection.cu kernels/pointwise.cu kernels/prefix_input.cu
-            kernels/prefix_kv_store.cu
+            kernels/prefix_kv_store.cu kernels/projection_split.cu
             kernels/rms_norm.cu kernels/rope.cu kernels/rounded_attention.cu
             kernels/suffix_metadata.cu
             kernels/time_embedding.cu
@@ -157,6 +159,28 @@ set(AGINFER_CUDA_TEST_ARCH "${AGINFER_CUDA_ARCH}" CACHE STRING
     "CUDA architecture number for the synthetic execution test")
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_projection_split_fixture.py
+      ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin
+    DEPENDS tests/make_projection_split_fixture.py src/aginfer/providers/projection_split.py VERBATIM)
+  add_custom_target(projection_split_fixture DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin)
+  add_executable(projection_split_test tests/projection_split_test.cc)
+  target_compile_features(projection_split_test PRIVATE cxx_std_20)
+  target_include_directories(projection_split_test PRIVATE cpp)
+  target_link_libraries(projection_split_test PRIVATE aginfer_runtime)
+  add_dependencies(projection_split_test projection_split_fixture)
+  add_test(NAME projection_split_test COMMAND projection_split_test ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin)
+  if(AGINFER_ENABLE_CUDA AND AGINFER_BUILD_CUDA_TESTS AND AGINFER_CUDA_ARCH STREQUAL "120")
+    add_executable(projection_split_cuda_test tests/projection_split_test.cc)
+    target_compile_definitions(projection_split_cuda_test PRIVATE TEST_CUDA=1)
+    target_compile_features(projection_split_cuda_test PRIVATE cxx_std_20)
+    target_include_directories(projection_split_cuda_test PRIVATE cpp)
+    target_link_libraries(projection_split_cuda_test PRIVATE aginfer_runtime CUDA::cudart)
+    add_dependencies(projection_split_cuda_test projection_split_fixture aginfer_aot_kernels)
+    add_test(NAME projection_split_cuda_test COMMAND projection_split_cuda_test
+      ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin ${AGINFER_AOT_CUBIN})
+  endif()
   if(TARGET aginfer_cublaslt_select)
     add_test(NAME cublaslt_selector_protocol_test COMMAND ${CMAKE_COMMAND} -E env
       PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src

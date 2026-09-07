@@ -152,7 +152,8 @@ def validate_selection_report(report, selection, cubin, program_sha256=None):
     return report
 
 
-def select_source_algorithms(source_path, *, cubin_path, selector_path, output, report_path, workspace_limit=WORKSPACE_LIMIT):
+def select_source_algorithms(source_path, *, cubin_path, selector_path, output, report_path, workspace_limit=WORKSPACE_LIMIT,
+                             fuse_projections=False):
     validate_workspace_limit(workspace_limit)
     output, report_path = Path(output), Path(report_path)
     if output.resolve() == report_path.resolve() or any(x.exists() or not x.parent.is_dir() for x in (output, report_path)):
@@ -165,6 +166,9 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
     _reject_ptx(cubin, "selection input")
     source = open_source_package(str(source_path), offline=True)
     program = Pi05SourceFrontend().import_program(source).program
+    if fuse_projections:
+        from .projection_fusion import fuse_projections as transform
+        program = transform(program).program
     inventory = build_lowering_inventory(program)
     problems = sorted({CublasLtLinearProblem.from_inventory(x, target_arch=CudaArch.SM120)
         for x in inventory.ops if x.opcode == "linear"}, key=lambda p: (int(p.dtype), p.m, p.n, p.k))
