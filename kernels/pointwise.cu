@@ -82,3 +82,13 @@ extern "C" __global__ void aginfer_mul_bf16(
     __nv_bfloat16* output, std::uint64_t numel) {
   BinaryGridStride(lhs, rhs, output, numel, MulBf16{});
 }
+extern "C" __global__ void aginfer_rounded_mul_add_bf16(
+    const __nv_bfloat16* lhs, const __nv_bfloat16* rhs,
+    const __nv_bfloat16* residual, __nv_bfloat16* output, unsigned long long numel) {
+  const auto first=static_cast<unsigned long long>(blockIdx.x)*blockDim.x+threadIdx.x;
+  const auto stride=static_cast<unsigned long long>(blockDim.x)*gridDim.x;
+  for(auto i=first;i<numel;i+=stride) {
+    const auto product=__float2bfloat16_rn(__fmul_rn(__bfloat162float(lhs[i]),__bfloat162float(rhs[i])));
+    output[i]=__float2bfloat16_rn(__fadd_rn(__bfloat162float(product),__bfloat162float(residual[i])));
+  }
+}

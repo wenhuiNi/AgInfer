@@ -26,6 +26,7 @@ add_library(aginfer_runtime STATIC
   cpp/patch_projection_payload.cc
   cpp/projection_split_payload.cc
   cpp/gelu_mul_payload.cc
+  cpp/rounded_mul_add_payload.cc
   cpp/state_update_payload.cc
   cpp/prefix_input_payload.cc
   cpp/prefix_kv_store_payload.cc
@@ -64,6 +65,7 @@ if(AGINFER_ENABLE_CUDA)
     cpp/providers/patch_projection.cc
     cpp/providers/projection_split.cc
     cpp/providers/gelu_mul.cc
+    cpp/providers/rounded_mul_add.cc
     cpp/providers/state_update.cc
     cpp/providers/aot_prefix_input.cc
     cpp/providers/aot_prefix_kv_store.cc
@@ -167,6 +169,18 @@ set(AGINFER_CUDA_TEST_ARCH "${AGINFER_CUDA_ARCH}" CACHE STRING
     "CUDA architecture number for the synthetic execution test")
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/rounded-mul-add.bin
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_rounded_mul_add.py --fixture
+      ${CMAKE_CURRENT_BINARY_DIR}/rounded-mul-add.bin
+    DEPENDS tests/test_rounded_mul_add.py src/aginfer/providers/rounded_mul_add.py VERBATIM)
+  add_custom_target(rounded_mul_add_fixture DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/rounded-mul-add.bin)
+  add_executable(rounded_mul_add_test tests/rounded_mul_add_test.cc)
+  target_compile_features(rounded_mul_add_test PRIVATE cxx_std_20)
+  target_include_directories(rounded_mul_add_test PRIVATE cpp)
+  target_link_libraries(rounded_mul_add_test PRIVATE aginfer_runtime)
+  add_dependencies(rounded_mul_add_test rounded_mul_add_fixture)
+  add_test(NAME rounded_mul_add_test COMMAND rounded_mul_add_test ${CMAKE_CURRENT_BINARY_DIR}/rounded-mul-add.bin)
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gelu-mul.bin
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
       ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_gelu_mul_fixture.py
@@ -204,6 +218,14 @@ if(BUILD_TESTING)
   add_dependencies(state_update_test state_update_fixture)
   add_test(NAME state_update_test COMMAND state_update_test ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin)
   if(AGINFER_ENABLE_CUDA AND AGINFER_BUILD_CUDA_TESTS AND AGINFER_CUDA_ARCH STREQUAL "120")
+    add_executable(rounded_mul_add_cuda_test tests/rounded_mul_add_test.cc)
+    target_compile_definitions(rounded_mul_add_cuda_test PRIVATE TEST_CUDA=1)
+    target_compile_features(rounded_mul_add_cuda_test PRIVATE cxx_std_20)
+    target_include_directories(rounded_mul_add_cuda_test PRIVATE cpp)
+    target_link_libraries(rounded_mul_add_cuda_test PRIVATE aginfer_runtime CUDA::cudart)
+    add_dependencies(rounded_mul_add_cuda_test rounded_mul_add_fixture aginfer_aot_kernels)
+    add_test(NAME rounded_mul_add_cuda_test COMMAND rounded_mul_add_cuda_test
+      ${CMAKE_CURRENT_BINARY_DIR}/rounded-mul-add.bin ${AGINFER_AOT_CUBIN})
     add_executable(gelu_mul_cuda_test tests/gelu_mul_test.cc)
     target_compile_definitions(gelu_mul_cuda_test PRIVATE TEST_CUDA=1)
     target_compile_features(gelu_mul_cuda_test PRIVATE cxx_std_20)

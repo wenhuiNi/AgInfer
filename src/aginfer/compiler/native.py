@@ -16,6 +16,7 @@ from ..providers.build_binding import BuildBinding, LinearBuildBinding
 from ..providers.rounded_attention import RoundedAttentionPayload
 from ..providers.projection_split import lower_projection_splits
 from ..providers.gelu_mul import lower_gelu_mul
+from ..providers.rounded_mul_add import lower_rounded_mul_add
 from ..providers.state_update import lower_state_updates
 from ..schema import CudaArch
 
@@ -58,7 +59,7 @@ class FixedAlgorithms:
         return cls(linear, patch, tuple(sorted(attention, key=lambda x: x.variant)))
 
 
-def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, include_placements=False, fuse_gelu_mul=False, fuse_ffn=False):
+def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, include_placements=False, fuse_gelu_mul=False, fuse_ffn=False, fuse_residual=False):
     arch = CudaArch.SM120
     digest = hashlib.sha256(cubin).hexdigest()
     if any(x.module_bytes != len(cubin) or x.module_sha256 != digest for x in algorithms.attention):
@@ -138,6 +139,16 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, 
         superseded = set().union(*(set(lowered[name].fused_execution_indices) for name in ("adaptive", "suffix", "prefix")))
         for name in ("cast", "pointwise", "rms"):
             lowered[name] = replace(lowered[name], commands=tuple(x for x in lowered[name].commands if x.execution_index not in superseded))
+        if fuse_residual:
+            excluded = set(superseded)
+            if 'gelu_mul' in lowered:
+                excluded.update(i for c in lowered['gelu_mul'].commands for i in c.fused_execution_indices)
+            fused = lower_rounded_mul_add(schedule, len(cubin), digest, excluded=excluded)
+            if fused.commands:
+                lowered['rounded_mul_add'] = fused
+                indices = {i for c in fused.commands for i in c.fused_execution_indices}
+                lowered['pointwise'] = replace(lowered['pointwise'], commands=tuple(
+                    c for c in lowered['pointwise'].commands if c.execution_index not in indices))
         placements = tuple(x for result in lowered.values() for x in placements_from_partial_lowering(schedule, result))
         owners = {}
         for name, result in lowered.items():
