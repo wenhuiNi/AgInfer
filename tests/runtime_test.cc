@@ -33,6 +33,11 @@ int main(int argc, char** argv) {
   aginfer::Session session;
   status = aginfer::Session::Create(runtime, model, nullptr, &session);
   if (status != AI_STATUS_OK) return 5;
+  ai_session_options graph_options; ai_session_options_init(&graph_options);
+  graph_options.flags = AI_SESSION_CUDA_GRAPH;
+  ai_session* rejected = nullptr;
+  if (ai_session_create(runtime.get(), model.get(), &graph_options, &rejected) != AI_STATUS_INVALID_ARGUMENT || rejected)
+    return 7;
 
   ai_port_info output;
   ai_port_info_init(&output);

@@ -92,4 +92,41 @@ tagged command stream through prepared native providers; enqueue itself does
 not parse plans, load modules, allocate device memory, choose algorithms, or
 synchronize. Vendor libraries can still perform cached kernel-handle queries;
 these are not a promise of lookup-free third-party internals. Prepare-time
-capture preflight is not a deployment CUDA Graph replay mode.
+capture preflight alone is not a deployment CUDA Graph replay mode.
+
+### Opt-in full-model CUDA Graph replay (v2)
+
+Set `ai_session_options.flags = AI_SESSION_CUDA_GRAPH` before session creation.
+The default (`flags=0`) remains direct submission; v1 plans reject this flag.
+No AIM rewrite, numerical algorithm change, or runtime tactic search is involved.
+After normal library preflight, Prepare records **all** commands, instantiates
+the resulting graph and uploads it on a private nonblocking stream. It waits
+for that upload, but never launches the model: inputs are not consumed, outputs
+are untouched, and submission counters remain zero. State refresh commands are
+inside the graph and execute on every replay. Prepare is idempotent after success.
+
+Enqueue submits one `cudaGraphLaunch` on the caller stream. It does not loop over
+commands even for accounting: logical provider counts are derived when queried.
+`ai_session_get_execution_info` includes logical commands submitted via graph
+launches. `ai_session_get_cuda_graph_info` separately reports whether graph mode
+was requested, whether instantiation succeeded, captured node count, and successful
+launch submissions. These are host-side receipts, not GPU completion or numerical
+validation. Capture, instantiation or launch failure is returned, never silently
+replaced by direct execution. The artifact's offline `capture_safe`/validation
+records are not upgraded by this explicitly requested runtime capture attempt.
+
+IO addresses stay frozen; update the contents at those addresses for new requests.
+The caller must order IO writes and inference on streams correctly and wait for
+outstanding GPU work before destroying sessions or buffers. A session is not
+concurrently reusable; separate sessions own separate graphs/state/workspaces.
+Internal graph mode rejects enqueue into an externally capturing stream, so an
+outer recording cannot be mistaken for an executed internal graph submission.
+Graph resources are destroyed before their commands, memory and CUBIN module.
+
+CUDA graph handles/executables are process/context-bound, not a portable AIM blob.
+A future explicit-node plan could persist node dependencies, stable kernel IDs,
+launch arguments and relocatable buffer offsets, then rebuild/instantiate nodes
+without stream capture. This is not the same as serializing a captured graph:
+vendor-library internal function handles and arguments need a supported ownership
+and relocation contract. The current implementation captures once per prepared
+session, not once per inference. See the [CUDA Graph API](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__GRAPH.html).

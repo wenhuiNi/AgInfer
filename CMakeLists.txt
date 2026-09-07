@@ -186,6 +186,17 @@ if(BUILD_TESTING)
   add_dependencies(state_update_test state_update_fixture)
   add_test(NAME state_update_test COMMAND state_update_test ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin)
   if(AGINFER_ENABLE_CUDA AND AGINFER_BUILD_CUDA_TESTS AND AGINFER_CUDA_ARCH STREQUAL "120")
+    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph.aim ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph-bad.aim
+      COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_cuda_graph_fixture.py
+        ${AGINFER_AOT_CUBIN} ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph.aim ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph-bad.aim
+      DEPENDS aginfer_aot_kernels tests/make_cuda_graph_fixture.py ${AGINFER_AOT_CUBIN} VERBATIM)
+    add_custom_target(cuda_graph_fixture DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph.aim ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph-bad.aim)
+    add_executable(cuda_graph_session_test tests/cuda_graph_session_test.cc)
+    target_link_libraries(cuda_graph_session_test PRIVATE aginfer_runtime CUDA::cudart)
+    add_dependencies(cuda_graph_session_test cuda_graph_fixture)
+    add_test(NAME cuda_graph_session_test COMMAND cuda_graph_session_test
+      ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph.aim ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph-bad.aim)
     add_executable(state_update_cuda_test tests/state_update_test.cc)
     target_compile_definitions(state_update_cuda_test PRIVATE TEST_CUDA=1)
     target_compile_features(state_update_cuda_test PRIVATE cxx_std_20)

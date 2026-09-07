@@ -11,7 +11,7 @@ namespace aginfer::internal {
 class ExecutableSession {
  public:
   ExecutableSession(const ParsedExecutablePlan& plan, const std::uint8_t* kernels,
-      std::uint64_t kernel_bytes, const std::uint8_t* weights);
+      std::uint64_t kernel_bytes, const std::uint8_t* weights, bool cuda_graph = false);
   ~ExecutableSession();
   Status Bind(std::uint32_t port_id, ai_port_kind kind, const ai_tensor_view& view);
   Status Prepare();
@@ -21,7 +21,9 @@ class ExecutableSession {
   const ParsedExecutablePlan& plan() const { return plan_; }
   std::uint64_t submitted(std::uint32_t provider_id) const;
   std::uint64_t enqueues() const { return enqueues_; }
+  void GraphInfo(ai_cuda_graph_info* info) const;
  private:
+  Status PrepareGraph();
   ParsedExecutablePlan plan_;
   const std::uint8_t* kernels_;
   std::uint64_t kernel_bytes_;
@@ -34,6 +36,9 @@ class ExecutableSession {
   std::vector<std::uint32_t> provider_ids_;
   std::vector<std::uint64_t> submissions_;
   std::uint64_t enqueues_ = 0;
+  bool cuda_graph_ = false;
+  void* graph_exec_ = nullptr;
+  std::uint64_t graph_nodes_ = 0, graph_launches_ = 0;
   bool prepared_ = false;
 };
 }  // namespace aginfer::internal

@@ -734,7 +734,7 @@ Status CreateSession(ai_runtime* runtime, ai_model* model,
     Status status = ValidateStruct(options, sizeof(ai_session_options),
                                    "ai_session_options");
     if (!status.ok()) return status;
-    if (options->flags != 0) {
+    if ((options->flags & ~AI_SESSION_CUDA_GRAPH) != 0) {
       return Error(StatusCode::kInvalidArgument,
                    "ai_session_options has unknown flags");
     }
@@ -770,10 +770,12 @@ Status CreateSession(ai_runtime* runtime, ai_model* model,
     if (!status.ok()) return status;
     session->executable = std::make_unique<aginfer::internal::ExecutableSession>(
         executable_plan, model->data + selected->kernel_offset, selected->kernel_size,
-        model->data + selected->weight_offset);
+        model->data + selected->weight_offset, (selected_options.flags & AI_SESSION_CUDA_GRAPH) != 0);
     *output = std::move(session);
     return Status::Ok();
   }
+  if (selected_options.flags & AI_SESSION_CUDA_GRAPH)
+    return Error(StatusCode::kInvalidArgument, "CUDA Graph mode requires executable-plan v2");
   status = aginfer::internal::ParsePlan(
       model->data + selected->plan_offset,
       static_cast<std::size_t>(selected->plan_size), selected->arch,
@@ -1279,6 +1281,25 @@ ai_status ai_session_get_execution_info(const ai_session* session, std::uint32_t
       }
       if (!info->commands_per_enqueue) return Fail(StatusCode::kInvalidArgument, "unknown executable provider ID");
     }
+    return AI_STATUS_OK;
+  });
+}
+
+void ai_cuda_graph_info_init(ai_cuda_graph_info* value) {
+  if (value == nullptr) return;
+  std::memset(value, 0, sizeof(*value));
+  value->struct_size = sizeof(*value); value->struct_version = AI_STRUCT_VERSION_1;
+}
+
+ai_status ai_session_get_cuda_graph_info(const ai_session* session, ai_cuda_graph_info* info) {
+  return Guard([&]() -> ai_status {
+    if (session == nullptr || !session->executable)
+      return Fail(StatusCode::kInvalidArgument, "CUDA Graph info requires an executable v2 session");
+    auto status = ValidateStruct(info, sizeof(ai_cuda_graph_info), "ai_cuda_graph_info");
+    if (!status.ok()) return Record(status);
+    auto caller_size = info->struct_size;
+    ai_cuda_graph_info_init(info); info->struct_size = caller_size;
+    session->executable->GraphInfo(info);
     return AI_STATUS_OK;
   });
 }

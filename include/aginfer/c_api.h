@@ -92,6 +92,10 @@ typedef struct ai_session_options {
   uint32_t flags;
 } ai_session_options;
 
+// Opt-in, executable-plan v2 only. Prepare captures the fixed plan; failure
+// is an error, never a silent switch to direct submission. flags=0 is unchanged.
+enum { AI_SESSION_CUDA_GRAPH = 1u };
+
 typedef struct ai_tensor_view {
   uint32_t struct_size;
   uint32_t struct_version;
@@ -136,7 +140,8 @@ typedef struct ai_workspace_info {
   uint64_t workspace_bytes;
 } ai_workspace_info;
 
-// Host submission counts, not GPU completion or CUDA Graph replay counts.
+// Logical commands submitted directly or through successful internal graph
+// launches, not GPU completion counts. Capture/Prepare does not increment them.
 // A v2 session has no fallback implementation. Query only when not enqueueing.
 typedef struct ai_execution_info {
   uint32_t struct_size;
@@ -151,6 +156,19 @@ void ai_execution_info_init(ai_execution_info* value);
 // provider_id=0 returns the entire plan; otherwise use its numeric command provider ID.
 ai_status ai_session_get_execution_info(const ai_session* session, uint32_t provider_id,
                                        ai_execution_info* info);
+
+typedef struct ai_cuda_graph_info {
+  uint32_t struct_size;
+  uint32_t struct_version;
+  uint32_t enabled;
+  uint32_t instantiated;
+  uint64_t node_count;
+  uint64_t launches;
+} ai_cuda_graph_info;
+
+void ai_cuda_graph_info_init(ai_cuda_graph_info* value);
+// V2 only. Successful launch submissions are not proof of GPU completion.
+ai_status ai_session_get_cuda_graph_info(const ai_session* session, ai_cuda_graph_info* info);
 
 void ai_provider_abi_init(ai_provider_abi* value);
 void ai_runtime_options_init(ai_runtime_options* value);

@@ -56,13 +56,17 @@ Status PreflightLibraries(const std::vector<std::unique_ptr<PreparedCommand>>& c
 }  // namespace
 
 ExecutableSession::ExecutableSession(const ParsedExecutablePlan& plan,
-    const std::uint8_t* kernels, std::uint64_t kernel_bytes, const std::uint8_t* weights)
+    const std::uint8_t* kernels, std::uint64_t kernel_bytes, const std::uint8_t* weights,
+    bool cuda_graph)
     : plan_(plan), kernels_(kernels), kernel_bytes_(kernel_bytes), host_weights_(weights),
-      bindings_(plan.port_count, nullptr) {}
+      bindings_(plan.port_count, nullptr), cuda_graph_(cuda_graph) {}
 
 ExecutableSession::~ExecutableSession() {
   if (!cuda_) return;
   cuda_->MakeCurrent();
+#ifdef AGINFER_HAS_CUDA_PROVIDERS
+  if (graph_exec_) cudaGraphExecDestroy(static_cast<cudaGraphExec_t>(graph_exec_));
+#endif
   commands_.clear();
   cuda_->Free(workspace_); cuda_->Free(state_); cuda_->Free(arena_); cuda_->Free(weights_);
   cuda_->UnloadModule(module_);
@@ -129,6 +133,9 @@ Status ExecutableSession::Prepare() {
   if (cuda_) return Status(StatusCode::kInvalidState, "failed executable Prepare requires a new session");
   if (std::any_of(bindings_.begin(), bindings_.end(), [](void* p) { return p == nullptr; }))
     return Status(StatusCode::kInvalidState, "bind all executable ports before Prepare");
+#ifndef AGINFER_HAS_CUDA_PROVIDERS
+  if (cuda_graph_) return Status(StatusCode::kIncompatiblePlatform, "CUDA Graph requires a CUDA-enabled runtime");
+#endif
   auto created = CudaDriver::Create(plan_.target_arch);
   if (!created.ok()) return created.status();
   cuda_ = std::make_unique<CudaDriver>(std::move(created).value());
@@ -208,12 +215,84 @@ Status ExecutableSession::Prepare() {
   status=PreflightLibraries(commands_);
   if(!status.ok())return status;
 #endif
+  if (cuda_graph_) {
+    status = PrepareGraph();
+    if (!status.ok()) return status;
+  }
   prepared_ = true;
   return Status::Ok();
 }
 
+Status ExecutableSession::PrepareGraph() {
+#ifdef AGINFER_HAS_CUDA_PROVIDERS
+  struct Capture {
+    cudaStream_t stream = nullptr;
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t executable = nullptr;
+    ~Capture() {
+      if (executable) cudaGraphExecDestroy(executable);
+      if (graph) cudaGraphDestroy(graph);
+      if (stream) cudaStreamDestroy(stream);
+    }
+  } capture;
+  auto checked = [](cudaError_t error) {
+    return error == cudaSuccess ? Status::Ok() : Status(StatusCode::kCudaError,
+        std::string("model CUDA Graph prepare: ") + cudaGetErrorString(error));
+  };
+  auto status = checked(cudaStreamCreateWithFlags(&capture.stream, cudaStreamNonBlocking));
+  if (!status.ok()) return status;
+  status = checked(cudaStreamBeginCapture(capture.stream, cudaStreamCaptureModeThreadLocal));
+  if (!status.ok()) return status;
+  // These calls record nodes only. Prefix refresh and all other state writes
+  // remain in the graph and execute on EVERY replay, not during Prepare.
+  for (std::size_t i = 0; i < commands_.size(); ++i) {
+    status = commands_[i]->Execute(capture.stream);
+    if (!status.ok()) {
+      status = Status(status.code(), "model CUDA Graph command " + std::to_string(i) + ": " + status.message());
+      break;
+    }
+  }
+  // Always end a begun capture, including the invalidated/error path.
+  auto ended = checked(cudaStreamEndCapture(capture.stream, &capture.graph));
+  if (!status.ok()) return status;
+  if (!ended.ok()) return ended;
+  std::size_t nodes = 0;
+  status = checked(cudaGraphGetNodes(capture.graph, nullptr, &nodes));
+  if (!status.ok()) return status;
+  if (!nodes) return Status(StatusCode::kInvalidState, "model CUDA Graph is empty");
+  status = checked(cudaGraphInstantiate(&capture.executable, capture.graph, 0));
+  if (!status.ok()) return status;
+  status = checked(cudaGraphUpload(capture.executable, capture.stream));
+  if (!status.ok()) return status;
+  status = checked(cudaStreamSynchronize(capture.stream));
+  if (!status.ok()) return status;
+  graph_exec_ = capture.executable;
+  capture.executable = nullptr;
+  graph_nodes_ = nodes;
+  return Status::Ok();
+#else
+  return Status(StatusCode::kIncompatiblePlatform, "CUDA Graph requires a CUDA-enabled runtime");
+#endif
+}
+
 Status ExecutableSession::Enqueue(CudaStream stream) {
   if (!prepared_) return Status(StatusCode::kInvalidState, "executable session must be prepared");
+#ifdef AGINFER_HAS_CUDA_PROVIDERS
+  if (graph_exec_) {
+    // Nested user capture would count a recording as an executed submission;
+    // this mode owns its graph and explicitly refuses that ambiguous contract.
+    cudaStreamCaptureStatus capture;
+    auto error = cudaStreamIsCapturing(static_cast<cudaStream_t>(stream), &capture);
+    if (error != cudaSuccess) return Status(StatusCode::kCudaError, cudaGetErrorString(error));
+    if (capture != cudaStreamCaptureStatusNone)
+      return Status(StatusCode::kInvalidState, "internal CUDA Graph mode cannot enqueue into external capture");
+    error = cudaGraphLaunch(static_cast<cudaGraphExec_t>(graph_exec_), static_cast<cudaStream_t>(stream));
+    if (error != cudaSuccess) return Status(StatusCode::kCudaError, cudaGetErrorString(error));
+    ++graph_launches_;
+    ++enqueues_;
+    return Status::Ok();
+  }
+#endif
   // No AgInfer parsing/lookup, allocation, IO, tactic selection or synchronization.
   // Prepared vendor calls may still query their cached kernel handles.
   for (std::size_t i = 0; i < commands_.size(); ++i) {
@@ -227,7 +306,13 @@ Status ExecutableSession::Enqueue(CudaStream stream) {
 std::uint64_t ExecutableSession::submitted(std::uint32_t provider) const {
   std::uint64_t count = 0;
   for (std::size_t i = 0; i < provider_ids_.size(); ++i)
-    if (provider == 0 || provider_ids_[i] == provider) count += submissions_[i];
+    if (provider == 0 || provider_ids_[i] == provider) count += submissions_[i] + graph_launches_;
   return count;
+}
+void ExecutableSession::GraphInfo(ai_cuda_graph_info* info) const {
+  info->enabled = cuda_graph_;
+  info->instantiated = graph_exec_ != nullptr;
+  info->node_count = graph_nodes_;
+  info->launches = graph_launches_;
 }
 }  // namespace aginfer::internal

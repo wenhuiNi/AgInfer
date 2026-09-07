@@ -31,6 +31,25 @@ int main(int argc, char** argv) {
   if (ai_session_get_execution_info(session, 0, &execution) || execution.commands_per_enqueue != 2 ||
       execution.enqueues || execution.commands_submitted || execution.fallback_count) return 10;
   if (ai_session_get_execution_info(session, 99, &execution) != AI_STATUS_INVALID_ARGUMENT) return 11;
+  ai_cuda_graph_info graph; ai_cuda_graph_info_init(&graph);
+  if (ai_session_get_cuda_graph_info(session, &graph) || graph.enabled || graph.instantiated ||
+      graph.node_count || graph.launches) return 12;
+  if (ai_session_get_cuda_graph_info(nullptr, &graph) != AI_STATUS_INVALID_ARGUMENT ||
+      ai_session_get_cuda_graph_info(session, nullptr) != AI_STATUS_INVALID_ARGUMENT) return 13;
+  graph.struct_size = 0;
+  if (ai_session_get_cuda_graph_info(session, &graph) != AI_STATUS_INVALID_ARGUMENT) return 14;
+  ai_cuda_graph_info_init(&graph); graph.struct_version = 99;
+  if (ai_session_get_cuda_graph_info(session, &graph) != AI_STATUS_INCOMPATIBLE_ABI) return 15;
+  ai_session* candidate = nullptr; ai_session_options graph_options; ai_session_options_init(&graph_options);
+  graph_options.flags = 2;
+  if (ai_session_create(runtime, model, &graph_options, &candidate) != AI_STATUS_INVALID_ARGUMENT || candidate) return 16;
+  graph_options.flags = AI_SESSION_CUDA_GRAPH;
+  if (ai_session_create(runtime, model, &graph_options, &candidate)) return 17;
+  ai_cuda_graph_info_init(&graph);
+  if (ai_session_get_cuda_graph_info(candidate, &graph) || graph.enabled != 1 || graph.instantiated ||
+      graph.node_count || graph.launches || ai_session_prepare(candidate) != AI_STATUS_INVALID_STATE ||
+      ai_session_enqueue(candidate, nullptr) != AI_STATUS_INVALID_STATE) return 18;
+  ai_session_destroy(candidate);
   ai_session_destroy(session); ai_model_destroy(model); ai_runtime_destroy(runtime);
   return 0;
 }
