@@ -34,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--output", type=Path, required=True)
     compile_parser.add_argument("--scratch", type=Path)
     compile_parser.add_argument("--selection-report", type=Path)
+    compile_parser.add_argument("--constant-evaluator", type=Path,
+        help="fold eligible constant-only commands offline with the native CUDA evaluator")
     compile_parser.add_argument("--resident-kv", action="store_true",
         help="reuse prefix KV backing and overwrite only the current suffix")
 
@@ -83,7 +85,8 @@ def main(argv: list[str] | None = None) -> int:
             output = compile_source(args.source, output=args.output, cubin_path=args.cubin,
                 kernel_record_path=args.kernel_build_record, algorithms_path=args.algorithms,
                 frontend=args.frontend, scratch=args.scratch, selection_report_path=args.selection_report,
-                fuse_projections=args.fuse_projections, resident_kv=args.resident_kv)
+                fuse_projections=args.fuse_projections, resident_kv=args.resident_kv,
+                constant_evaluator=args.constant_evaluator)
         elif args.command == "select-algorithms":
             from .compiler.selection import select_source_algorithms
             output = select_source_algorithms(args.source, cubin_path=args.cubin, selector_path=args.selector,

@@ -19,6 +19,8 @@ public release ABI.
   closed. Prototype AIM v1 files are intentionally incompatible.
 - Target selection is exact. The host platform and CUDA architecture must have
   an explicit variant; there is no cross-architecture fallback or PTX JIT.
+- V2 plans may have zero input ports for constant-only offline evaluation, but
+  still require at least one output port and complete binding of external storage.
 - CUDA Driver/Runtime and provider ABI requirements live in the checksummed
   binary compatibility section. The human-readable manifest is not consulted
   for runtime compatibility decisions.

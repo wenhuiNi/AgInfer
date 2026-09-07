@@ -75,6 +75,10 @@ if(AGINFER_ENABLE_CUDA)
     cpp/providers/cublaslt_linear.cc)
   target_link_libraries(aginfer_runtime PRIVATE CUDA::cublasLt CUDA::cudart)
   if(AGINFER_BUILD_COMPILER_TOOLS)
+    add_executable(aginfer_constant_eval tools/constant_eval.cc)
+    target_compile_features(aginfer_constant_eval PRIVATE cxx_std_17)
+    target_compile_options(aginfer_constant_eval PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(aginfer_constant_eval PRIVATE aginfer_runtime CUDA::cudart)
     add_executable(aginfer_cublaslt_select tools/cublaslt_select.cc)
     target_compile_features(aginfer_cublaslt_select PRIVATE cxx_std_17)
     target_compile_options(aginfer_cublaslt_select PRIVATE -Wall -Wextra -Wpedantic)
@@ -186,6 +190,12 @@ if(BUILD_TESTING)
   add_dependencies(state_update_test state_update_fixture)
   add_test(NAME state_update_test COMMAND state_update_test ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin)
   if(AGINFER_ENABLE_CUDA AND AGINFER_BUILD_CUDA_TESTS AND AGINFER_CUDA_ARCH STREQUAL "120")
+    if(TARGET aginfer_constant_eval)
+      add_test(NAME constant_eval_cuda_test COMMAND ${CMAKE_COMMAND} -E env
+        PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src:${CMAKE_CURRENT_SOURCE_DIR}
+        ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_constant_eval.py
+        $<TARGET_FILE:aginfer_constant_eval> ${AGINFER_AOT_CUBIN})
+    endif()
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph.aim ${CMAKE_CURRENT_BINARY_DIR}/cuda-graph-bad.aim
       COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
         ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_cuda_graph_fixture.py

@@ -437,7 +437,6 @@ Status ParseExecutablePlan(const std::uint8_t* data, std::size_t size,
     }
   }
 
-  bool has_input = false;
   bool has_output = false;
   std::vector<bool> port_values(value_count, false);
   for (std::uint32_t index = 0; index < port_count; ++index) {
@@ -468,11 +467,10 @@ Status ParseExecutablePlan(const std::uint8_t* data, std::size_t size,
       return Error("executable plan port storage region is invalid");
     }
     port_values[root] = true;
-    has_input = has_input || port.kind == ExecutablePortKind::kInput;
     has_output = has_output || port.kind == ExecutablePortKind::kOutput;
   }
-  if (!has_input || !has_output) {
-    return Error("executable plan requires input and output ports");
+  if (!has_output) {
+    return Error("executable plan requires output ports");
   }
 
   std::vector<bool> state_values(value_count, false);

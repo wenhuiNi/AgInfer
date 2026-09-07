@@ -87,6 +87,17 @@ def verify_artifact(path, *, require_build_record=False):
                         or build.get("memory_sha256") != plan.memory_plan_sha256
                         or build.get("weights") != {"bytes": variant.weights.size, "sha256": variant.weights.sha256.hex()}):
                     raise ValidationError("compiler build does not bind its executable sections")
+                if "constant_folding" in build:
+                    from .constant_folding import validate_folding_report
+                    fold = build["constant_folding"]
+                    validate_folding_report(fold, plan)
+                    computed_digest = hashlib.sha256()
+                    for entry in fold["values"]:
+                        value = plan.values[entry["value_id"]]
+                        f.seek(variant.weights.offset + value.offset)
+                        computed_digest.update(f.read(value.byte_size))
+                    if computed_digest.hexdigest() != fold["output_sha256"]:
+                        raise ValidationError("folded constant payload digest differs from evaluator output")
             decoded = {}
             used = set()
             for command in plan.command_stream.commands:

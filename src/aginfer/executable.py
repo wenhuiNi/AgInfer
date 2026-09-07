@@ -673,10 +673,9 @@ def parse_executable_plan(
             raise FormatError(f"executable plan port {index} has an invalid value contract")
         port_values.add(roots[value_id])
         ports.append(ExecutablePort(port_id, kind, value_id))
-    if not any(item.kind == ExecutablePortKind.INPUT for item in ports) or not any(
-        item.kind == ExecutablePortKind.OUTPUT for item in ports
-    ):
-        raise FormatError("executable plan requires input and output ports")
+    # Constant-only offline evaluation graphs legitimately have no runtime input.
+    if not any(item.kind == ExecutablePortKind.OUTPUT for item in ports):
+        raise FormatError("executable plan requires output ports")
     if port_values != {v.value_id for v in values if v.region in {
         ExecutableValueRegion.EXTERNAL_INPUT, ExecutableValueRegion.EXTERNAL_OUTPUT
     }}:

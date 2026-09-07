@@ -32,6 +32,7 @@ def pack_command_weights(
     *,
     constants: ConstantStore | None = None,
     literal_materialization: LiteralMaterialization | None = None,
+    computed_constants: dict[int, bytes] | None = None,
     chunk_size: int = 4 * 1024 * 1024,
 ) -> PackedWeights:
     """Stream command-referenced constants into one deterministic weight blob."""
@@ -62,6 +63,12 @@ def pack_command_weights(
             if allocations[roots[operand.value_id]].region == AllocationRegion.CONSTANT
         }
     )
+    computed_constants = {} if computed_constants is None else computed_constants
+    if (not isinstance(computed_constants, dict)
+            or any(type(k) is not int or k not in referenced_roots or not isinstance(v, bytes)
+                   or len(v) != allocations[k].byte_size or schedule.values[k].constant_identity is not None
+                   for k, v in computed_constants.items())):
+        raise ValidationError("computed constants must exactly sized new command-referenced constant roots")
     materialized = (
         {}
         if literal_materialization is None
@@ -92,7 +99,13 @@ def pack_command_weights(
                 span_digest = hashlib.sha256()
                 written = 0
                 record = materialized.get(value_id)
-                if record is not None:
+                if value_id in computed_constants:
+                    payload = computed_constants[value_id]
+                    output.write(payload)
+                    span_digest.update(payload)
+                    whole_digest.update(payload)
+                    written = len(payload)
+                elif record is not None:
                     if literal_materialization is None:
                         raise AssertionError("materialized record lost its owner")
                     payload = literal_materialization.data[

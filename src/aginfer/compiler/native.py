@@ -57,7 +57,7 @@ class FixedAlgorithms:
         return cls(linear, patch, tuple(sorted(attention, key=lambda x: x.variant)))
 
 
-def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms):
+def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, include_placements=False):
     arch = CudaArch.SM120
     digest = hashlib.sha256(cubin).hexdigest()
     if any(x.module_bytes != len(cubin) or x.module_sha256 != digest for x in algorithms.attention):
@@ -152,4 +152,5 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms):
         if (cap.implementation_digest != hashlib.sha256(cmd.payload).hexdigest()
                 or cap.supports_capture != cmd.capture_safe or cap.provider_id != cmd.provider_id):
             raise ValidationError("candidate command differs from its exact capability")
-    return inventory, schedule, memory, commands, literals, tuple(capabilities[key] for key in sorted(used))
+    result = inventory, schedule, memory, commands, literals, tuple(capabilities[key] for key in sorted(used))
+    return (*result, placements) if include_placements else result

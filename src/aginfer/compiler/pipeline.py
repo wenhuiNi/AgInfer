@@ -44,7 +44,8 @@ def validate_kernel_record(record, cubin):
 
 
 def compile_source(source_path, *, output, cubin_path, kernel_record_path, algorithms_path,
-                   frontend="pi05", scratch=None, selection_report_path=None, fuse_projections=False, resident_kv=False):
+                   frontend="pi05", scratch=None, selection_report_path=None, fuse_projections=False, resident_kv=False,
+                   constant_evaluator=None):
     if frontend != "pi05":
         raise ValidationError("no delivered source frontend for this request")
     output = Path(output)
@@ -79,14 +80,24 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
         selection_report = validate_selection_report(read_json(selection_report_path), selection, cubin,
             hashlib.sha256(dump_program(program).encode()).hexdigest())
     source_files = {asset.path: file_identity(source.assets.root / asset.path) for asset in source.manifest.assets}
-    inventory, schedule, memory, commands, literals, capabilities = lower_native_program(program, cubin, algorithms)
+    inventory, schedule, memory, commands, literals, capabilities, placements = lower_native_program(
+        program, cubin, algorithms, include_placements=True)
     with tempfile.TemporaryDirectory(prefix="aginfer-compile-", dir=scratch) as temporary:
         root = Path(temporary)
         # Freeze the exact kernel bytes read above against concurrent source edits.
         frozen_cubin = root / "module.cubin"
         frozen_cubin.write_bytes(cubin)
+        computed, folding = None, None
+        if constant_evaluator is not None:
+            from .constant_folding import fold_native_constants
+            memory, commands, computed, folding = fold_native_constants(root,
+                evaluator=constant_evaluator, cubin_path=frozen_cubin, schedule=schedule,
+                memory=memory, commands=commands, placements=placements, inventory=inventory,
+                constants=constants, literals=literals)
+            used = {cmd.capability_digest for cmd in commands.commands}
+            capabilities = tuple(cap for cap in capabilities if cap.digest in used)
         weights = pack_command_weights(root / "weights.bin", schedule, memory, inventory, commands,
-            constants=constants, literal_materialization=literals)
+            constants=constants, literal_materialization=literals, computed_constants=computed)
         plan = compile_executable_plan(schedule, memory, commands, weights.spans, weights_bytes=weights.byte_size)
         plan_path = root / "plan.bin"
         plan_path.write_bytes(plan.data)
@@ -111,6 +122,8 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
             build["projection_fusion"] = fusion.report()
         if resident is not None:
             build["resident_kv"] = resident.report()
+        if folding is not None:
+            build["constant_folding"] = folding
         if fusion is not None or resident is not None:
             build["source_program_sha256"] = hashlib.sha256(dump_program(imported.program).encode()).hexdigest()
         if selection_report is not None:
