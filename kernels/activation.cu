@@ -69,3 +69,17 @@ extern "C" __global__ void aginfer_silu_f32(
     output[index] = value / (1.0F + expf(-value));
   }
 }
+
+extern "C" __global__ void aginfer_gelu_tanh_mul_bf16(
+    const __nv_bfloat16* gate, const __nv_bfloat16* up,
+    __nv_bfloat16* output, std::uint64_t numel) {
+  const std::uint64_t first =
+      static_cast<std::uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::uint64_t stride =
+      static_cast<std::uint64_t>(blockDim.x) * gridDim.x;
+  for (std::uint64_t i = first; i < numel; i += stride) {
+    // Preserve the materialized GELU's BF16 rounding before multiplication.
+    const auto rounded = __float2bfloat16_rn(GeluTanh(__bfloat162float(gate[i])));
+    output[i] = __float2bfloat16_rn(__bfloat162float(rounded) * __bfloat162float(up[i]));
+  }
+}

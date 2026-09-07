@@ -25,6 +25,7 @@ add_library(aginfer_runtime STATIC
   cpp/kv_pack_payload.cc
   cpp/patch_projection_payload.cc
   cpp/projection_split_payload.cc
+  cpp/gelu_mul_payload.cc
   cpp/state_update_payload.cc
   cpp/prefix_input_payload.cc
   cpp/prefix_kv_store_payload.cc
@@ -62,6 +63,7 @@ if(AGINFER_ENABLE_CUDA)
     cpp/providers/aot_kv_pack.cc
     cpp/providers/patch_projection.cc
     cpp/providers/projection_split.cc
+    cpp/providers/gelu_mul.cc
     cpp/providers/state_update.cc
     cpp/providers/aot_prefix_input.cc
     cpp/providers/aot_prefix_kv_store.cc
@@ -165,6 +167,18 @@ set(AGINFER_CUDA_TEST_ARCH "${AGINFER_CUDA_ARCH}" CACHE STRING
     "CUDA architecture number for the synthetic execution test")
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gelu-mul.bin
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_gelu_mul_fixture.py
+      ${CMAKE_CURRENT_BINARY_DIR}/gelu-mul.bin
+    DEPENDS tests/make_gelu_mul_fixture.py src/aginfer/providers/gelu_mul.py VERBATIM)
+  add_custom_target(gelu_mul_fixture DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/gelu-mul.bin)
+  add_executable(gelu_mul_test tests/gelu_mul_test.cc)
+  target_compile_features(gelu_mul_test PRIVATE cxx_std_20)
+  target_include_directories(gelu_mul_test PRIVATE cpp)
+  target_link_libraries(gelu_mul_test PRIVATE aginfer_runtime)
+  add_dependencies(gelu_mul_test gelu_mul_fixture)
+  add_test(NAME gelu_mul_test COMMAND gelu_mul_test ${CMAKE_CURRENT_BINARY_DIR}/gelu-mul.bin)
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
       ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_projection_split_fixture.py
@@ -190,6 +204,14 @@ if(BUILD_TESTING)
   add_dependencies(state_update_test state_update_fixture)
   add_test(NAME state_update_test COMMAND state_update_test ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin)
   if(AGINFER_ENABLE_CUDA AND AGINFER_BUILD_CUDA_TESTS AND AGINFER_CUDA_ARCH STREQUAL "120")
+    add_executable(gelu_mul_cuda_test tests/gelu_mul_test.cc)
+    target_compile_definitions(gelu_mul_cuda_test PRIVATE TEST_CUDA=1)
+    target_compile_features(gelu_mul_cuda_test PRIVATE cxx_std_20)
+    target_include_directories(gelu_mul_cuda_test PRIVATE cpp)
+    target_link_libraries(gelu_mul_cuda_test PRIVATE aginfer_runtime CUDA::cudart)
+    add_dependencies(gelu_mul_cuda_test gelu_mul_fixture aginfer_aot_kernels)
+    add_test(NAME gelu_mul_cuda_test COMMAND gelu_mul_cuda_test
+      ${CMAKE_CURRENT_BINARY_DIR}/gelu-mul.bin ${AGINFER_AOT_CUBIN})
     if(TARGET aginfer_constant_eval)
       add_test(NAME constant_eval_cuda_test COMMAND ${CMAKE_COMMAND} -E env
         PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src:${CMAKE_CURRENT_SOURCE_DIR}

@@ -15,6 +15,7 @@ from ..lowering.memory import replan_memory_for_commands
 from ..providers.build_binding import BuildBinding, LinearBuildBinding
 from ..providers.rounded_attention import RoundedAttentionPayload
 from ..providers.projection_split import lower_projection_splits
+from ..providers.gelu_mul import lower_gelu_mul
 from ..providers.state_update import lower_state_updates
 from ..schema import CudaArch
 
@@ -57,7 +58,7 @@ class FixedAlgorithms:
         return cls(linear, patch, tuple(sorted(attention, key=lambda x: x.variant)))
 
 
-def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, include_placements=False):
+def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, include_placements=False, fuse_gelu_mul=False):
     arch = CudaArch.SM120
     digest = hashlib.sha256(cubin).hexdigest()
     if any(x.module_bytes != len(cubin) or x.module_sha256 != digest for x in algorithms.attention):
@@ -124,6 +125,14 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, 
         split = lower_projection_splits(schedule, len(cubin), digest)
         if split.commands:
             lowered["projection_split"] = split
+        if fuse_gelu_mul:
+            fused = lower_gelu_mul(schedule, len(cubin), digest)
+            if fused.commands:
+                lowered["gelu_mul"] = fused
+                indices = {i for c in fused.commands for i in c.fused_execution_indices}
+                for name in ("activation", "pointwise"):
+                    lowered[name] = replace(lowered[name], commands=tuple(
+                        c for c in lowered[name].commands if c.execution_index not in indices))
         for index, ((problem, fn), payload) in enumerate(zip(attention, algorithms.attention)):
             lowered[f"attention_{index}"] = call(fn, BuildBinding((problem,), (payload,), 5))
         superseded = set().union(*(set(lowered[name].fused_execution_indices) for name in ("adaptive", "suffix", "prefix")))

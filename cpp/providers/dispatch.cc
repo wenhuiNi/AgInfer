@@ -8,6 +8,7 @@
 #include "providers/cublaslt_linear.h"
 #include "providers/patch_projection.h"
 #include "providers/projection_split.h"
+#include "providers/gelu_mul.h"
 #include "providers/state_update.h"
 #include "providers/aot_prefix_input.h"
 #include "providers/aot_cast.h"
@@ -122,6 +123,10 @@ Status PrepareProviderCommand(const CommandRecordView& record,
   if (Magic(payload, "AISTU1\0")) {
     if (!Access(b, "rrww")) return Refused("state update operand contract mismatch");
     return PrepareStateUpdate(payload, b, module, output);
+  }
+  if (Magic(payload, "AIGMU1\0")) {
+    if (!Access(b, "rrw")) return Refused("GELU-multiply operand contract mismatch");
+    return PrepareGeluMul(payload, b, module, output);
   }
   if (Magic(payload, "AIPSP1\0")) {
     if (!Access(b, "rwww")) return Refused("projection split operand contract mismatch");
