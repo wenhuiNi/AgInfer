@@ -15,8 +15,8 @@ def _plan() -> dict:
         "shape_dispatch": [
             {
                 "profile": "vector4",
-                "inputs": [{"name": "input", "dtype": "F32", "shape": [4]}],
-                "outputs": [{"name": "output", "dtype": "F32", "shape": [4]}],
+                "inputs": [{"id": 3, "name": "input", "dtype": "F32", "shape": [4]}],
+                "outputs": [{"id": 9, "name": "output", "dtype": "F32", "shape": [4]}],
                 "launches": [
                     {
                         "kernel": "copy_f32",
@@ -65,6 +65,16 @@ class PlanTests(unittest.TestCase):
         plan = _plan()
         plan["shape_dispatch"][0]["launches"][0]["block"] = [1024, 2, 1]
         with self.assertRaisesRegex(ValidationError, "more than 1024"):
+            compile_execution_plan(plan, CudaArch.SM89, weight_size=64)
+
+    def test_rejects_missing_or_duplicate_numeric_port_ids(self) -> None:
+        plan = _plan()
+        del plan["shape_dispatch"][0]["inputs"][0]["id"]
+        with self.assertRaisesRegex(ValidationError, "id must be an unsigned integer"):
+            compile_execution_plan(plan, CudaArch.SM89, weight_size=64)
+        plan = _plan()
+        plan["shape_dispatch"][0]["outputs"][0]["id"] = 3
+        with self.assertRaisesRegex(ValidationError, "duplicate numeric port ID"):
             compile_execution_plan(plan, CudaArch.SM89, weight_size=64)
 
 

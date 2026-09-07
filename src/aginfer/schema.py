@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum, IntEnum
-from typing import Any
 
-SCHEMA_MAJOR = 1
+SCHEMA_MAJOR = 2
 SCHEMA_MINOR = 0
 RUNTIME_ABI = 1
 ALIGNMENT = 256
@@ -66,28 +64,6 @@ SUPPORTED_CHECKPOINT_DTYPES = frozenset(item.value for item in DType)
 REJECTED_DTYPES = frozenset(
     {"I8", "U8", "I16", "U16", "I32", "U32", "I64", "U64", "F64", "BOOL", "F8_E5M2"}
 )
-
-
-@dataclass(frozen=True)
-class ToolchainRange:
-    cuda_driver_min: int
-    cuda_runtime_min: int
-    cuda_runtime_max: int
-    cublaslt_abi: int
-    cudnn_abi: int
-
-    def to_dict(self) -> dict[str, int]:
-        return {
-            "cuda_driver_min": self.cuda_driver_min,
-            "cuda_runtime_min": self.cuda_runtime_min,
-            "cuda_runtime_max": self.cuda_runtime_max,
-            "cublaslt_abi": self.cublaslt_abi,
-            "cudnn_abi": self.cudnn_abi,
-        }
-
-    @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "ToolchainRange":
-        return cls(**{field: int(value[field]) for field in cls.__dataclass_fields__})
 
 
 def validate_target(platform: Platform, arches: list[CudaArch]) -> None:

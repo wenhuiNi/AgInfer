@@ -2,293 +2,191 @@
 
 # AgInfer
 
-**面向端侧 VLA/VLM 模型的目标相关 AOT 部署方案**
+**面向 VLA/VLM 目标相关 AOT 部署的实验性基础实现**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
 [![C++](https://img.shields.io/badge/C%2B%2B-20-00599C.svg?logo=cplusplus&logoColor=white)](CMakeLists.txt)
-[![CUDA](https://img.shields.io/badge/CUDA-sm89%20%7C%20sm110%20%7C%20sm120-76B900.svg?logo=nvidia&logoColor=white)](#支持的目标平台)
 
 [English](README.md) · 简体中文
 
 </div>
 
-AgInfer 将模型 checkpoint 和目标相关的 CUDA 产物编译为单个、可 mmap
-加载的 `.aim` 文件。轻量 C++ Runtime 会在部署设备上完成完整性与兼容性校验，
-并选择与当前硬件精确匹配的变体；目标设备不依赖 PyTorch、Python、ONNX
-Runtime 或 TensorRT。
+AgInfer 正在实现离线模型编译器和独立的 C++/CUDA Runtime。目标部署 artifact
+将包含 lowered program、packed weights、目标相关实现和经过验证的执行元数据，
+使部署进程不依赖 Python、PyTorch、ONNX Runtime 或 TensorRT。
 
-> [!IMPORTANT]
-> AgInfer 只接受精确匹配的目标。Runtime 不会回退到相近 CUDA 架构，也不会
-> 执行 PTX JIT、运行时自动调优或运行时权重转换。
+## 项目状态
 
-## 核心特性
+当前仓库仍处于基础实现阶段，尚未提供可发布的模型 importer、优化器、量化器、
+生产级 artifact schema 或端到端支持模型。因此 GR00T 和 LingBot 不再作为已支持
+模型对外声明。
 
-- **单文件部署：** 图、元数据、packed 权重、CUBIN Kernel、tactic 和执行计划
-  全部保存在一个 AIM 容器中。
-- **架构专用 AOT：** x86_64 包可同时包含 `sm89` 和 `sm120`，Jetson AGX
-  Thor 使用独立的 `sm110` 包。
-- **安全读取 checkpoint：** 只读取 safetensors 和标准 Hugging Face 元数据，
-  拒绝 pickle checkpoint 和远程代码。
-- **严格保持 dtype：** 原生支持 FP32、FP16、BF16，以及带显式 scale 的
-  ModelOpt Unified Hugging Face E4M3 FP8。
-- **默认完整性校验：** 校验整文件和各 section 的 SHA-256、范围、对齐及 ABI。
-- **原生执行：** C++20 Runtime 通过 CUDA Driver API 直接加载 CUBIN，并在
-  调用方 stream 上提交静态 launch recipe。
+目前实际实现的能力包括：
 
-```text
-Hugging Face checkpoint ─┐
-Shape profile ───────────┼──▶ modelc ──▶ model.aim ──▶ C++ Runtime ──▶ NVIDIA GPU
-AOT CUDA 产物 ───────────┘
-```
+- 有边界检查的 safetensors header 读取，以及 pickle checkpoint 拒绝；
+- 支持单文件/分片 safetensors 的 namespace-aware source manifest、有界常量访问和
+  fail-closed recipe coverage；
+- 实验性的 mmap-friendly AIM 容器与范围检查；完整 SHA-256 检查在离线 verify 或
+  Debug/显式校验 Runtime 构建中执行，部署构建默认不扫描，详见
+  [加载校验策略](docs/runtime-contract.md#load-time-checksum-policy)；
+- 实验性v1 kernel-launch与v2 tagged-provider二进制执行计划；
+- 离线source-to-AIM候选编译器、显式固定算法、内容寻址build record和v2可执行payload校验器；
+- 最小 typed-SSA ProgramIR verifier、稳定文本 dump，以及覆盖首批通用 op 的
+  纯 Python CPU reference executor；
+- 使用 opaque handle、numeric port、显式 prepare/bind/enqueue 的 C ABI，
+  以及 C++17 RAII 薄封装；
+- 已由真实目标架构 fixture 覆盖的 CUDA Driver launch 路径；
+- 默认 CUDA 构建会生成目标架构专用、无 PTX 的 AOT
+  cast/pointwise/exact tanh-GELU/SiLU/F32 vision attention/LayerNorm/RMSNorm/
+  split-half RoPE/denoise KV-pack/prefix KV-store/denoise metadata/prefix-input
+  assembly/patchify CUBIN，
+  并包含 native prepared command 与 exact cuBLASLt linear provider；
+- 面向 SM120、PI0.5 类 BF16 GQA denoise region 的 exact FlashInfer FA2 command，
+  直接消费 dense 2-D BOOL mask 并融合输出 BSHD；
+- 面向 SM120、PI0.5 类 BF16 GQA prefix region 的 exact FlashInfer FA2 command，
+  直接消费共享 1-D pad mask，保留 finite-mask fully-masked-row 语义，并融合四个
+  mask op 与输出 BSHD；
+- 面向 SM120、PI0.5 类 F32 vision-attention region 的自有 exact AOT command，
+  融合输入/输出 transpose 与 scalar-mask broadcast；
+- 面向 SM120、F32 `[1,256,1152]` vision 边界的自有 exact affine LayerNorm
+  AOT command；
+- 面向 SM120、F32 `[1,50,1024]` 与 BF16 activation/F32 weight
+  `[1,968,2048]` 边界的自有 exact RMSNorm AOT command；
+- 面向 SM120、BF16 `[1,50,1024]` hidden 与 F32 `[1,3072]`
+  scale/shift/gate modulation 的自有 exact fused adaptive RMSNorm command，
+  用一次 launch替代独占的 cast/norm/slice/broadcast/pointwise链；
+- 面向 SM120 的 exact denoise KV-pack command，用一次 launch 拼接
+  prefix/current BF16 K/V，并吸收单 KV head 的 BSHD→BHSD V transpose；
+- 面向 SM120 的 exact prefix KV state-store command，用一次 launch写入两项
+  persistent state，并由内存规划把 singleton-axis row-major transpose证明为view；
+- 面向 SM120 的 exact denoise suffix-metadata command，用一次 launch扩展
+  prefix pad mask并构造50项position ID，同时逐项保留mask中的空洞；
+- 面向 SM120 的 exact prefix-input command，用一次 launch完成语言 embedding
+  gather/scale、三路投影图像拼接以及共享 pad mask/position ID 构造；
+- 面向 SM120 的 exact patch-projection command，将 AOT NCHW patchify 与锁定的
+  cuBLASLt F32 projection组合，并直接写出NHWC；
+- 面向 SM120 的 exact F32 time sinusoidal-embedding command，用一次launch保留
+  源模型的Float64周期与三角函数语义；
+- 面向 SM120 的 exact terminal F32 action-slice command，从每个32-wide row
+  复制 `[0,7)`，不把跨row非连续输出伪装成alias；
+- 将静态 BOOL/I32/F32/BF16 literal broadcast 确定性物化为经校验、按内容去重的
+  constant blob，并对只插入 singleton 轴的 broadcast 做零拷贝内存规划；
+- 面向 SM120、sequence 968/50、heads 8/1 的自有 exact split-half BF16 RoPE
+  command，并融合各自独占的 BSHD→BHSD 输入 transpose；
+- 面向 SM120 三个已交付 BF16/F32 activation shape 的自有 exact tanh-GELU
+  command，以及用于 `[1,1024]` 的 F32 SiLU command；
+- artifact 损坏、目标不匹配、tensor contract 和 launch plan 测试。
 
-## 目录
+当前 AIM schema 和 Runtime ABI 均为实验接口，不提供兼容性承诺。SHA-256 只能检测
+意外损坏，不能认证来自不可信来源的 artifact。
 
-- [支持的目标平台](#支持的目标平台)
-- [支持的模型](#支持的模型)
-- [环境要求](#环境要求)
-- [安装](#安装)
-- [快速开始](#快速开始)
-- [Artifact 目录](#artifact-目录)
-- [C++ 集成](#c-集成)
-- [Checkpoint 与精度规则](#checkpoint-与精度规则)
-- [常见问题](#常见问题)
-- [AIM 格式](#aim-格式)
-- [参与贡献](#参与贡献)
-- [许可证](#许可证)
+已经实现的 ownership、版本和执行规则见
+[实验性 Runtime contract](docs/runtime-contract.md)。
+独立版本的语义层见 [实验性 ProgramIR contract](docs/program-ir.md)。
+离线 checkpoint 清单与常量寻址规则见
+[实验性 source contract](docs/source-contract.md)。
+首个仅覆盖 source 的 recipe 审计见
+[PI0.5 source inventory](docs/pi05-source-inventory.md)；这不代表端到端模型支持。
+当前三个 attention region 分别见
+[FlashInfer contract](docs/flashinfer-attention.md) 与
+[自有 F32 vision-attention contract](docs/aot-vision-attention.md)。
+当前 normalization 边界见
+[自有 F32 LayerNorm contract](docs/aot-layer-norm.md) 与
+[自有 RMSNorm contract](docs/aot-rms-norm.md)。融合 denoise normalization
+region 见 [adaptive RMSNorm contract](docs/aot-adaptive-rms-norm.md)。
+exact denoise K/V 物化边界见 [KV-pack contract](docs/aot-kv-pack.md)。
+成对 persistent prefix-cache 写入见
+[prefix KV state-store contract](docs/aot-prefix-kv-store.md)。
+denoise mask/position 构造边界见
+[suffix-metadata contract](docs/aot-suffix-metadata.md)。
+prefix embedding/mask/position assembly 边界见
+[prefix-input contract](docs/aot-prefix-input.md)。
+非重叠vision patch projection见
+[patch-projection contract](docs/patch-projection.md)。
+固定Float64语义的timestep展开见
+[time-embedding contract](docs/aot-time-embedding.md)。
+tensor-only terminal输出边界见
+[action-slice contract](docs/aot-action-slice.md)。
+离线 literal broadcast 编码与 memory-plan 集成见
+[compile-time materialization contract](docs/literal-materialization.md)。
+固定的 split-half rotary region 见
+[自有 RoPE contract](docs/aot-rope.md)。
+固定 activation region 见
+[自有 activation contract](docs/aot-activation.md)。
 
-## 支持的目标平台
+## 构建与测试
 
-| Host platform | CUDA 架构 | 目标设备 |
-|---|---:|---|
-| `linux-x86_64-gnu` | `sm89` | GeForce RTX 40 系列 |
-| `linux-x86_64-gnu` | `sm120` | GeForce RTX 50 系列 |
-| `linux-aarch64-sbsa` | `sm110` | Jetson AGX Thor |
-
-单个 AIM 文件只对应一个 host platform。x86_64 AIM 可以同时包含 `sm89` 和
-`sm120`；Thor 必须生成独立的 `linux-aarch64-sbsa + sm110` AIM 文件。
-
-## 支持的模型
-
-| 模型系列 | Adapter | 说明 |
-|---|---|---|
-| NVIDIA GR00T N1.5 | `groot_n1_5` | Eagle VLM + flow-matching DiT action head |
-| LingBot-VLA 1.0 | `lingbot_vla_1` | 无深度版本，内嵌 Qwen2.5-VL backbone |
-
-LingBot Adapter 需要指定 `--backbone <qwen2.5-vl-snapshot>`，从而保证部署时
-AIM 文件不依赖外部 backbone。
-
-## 环境要求
-
-### 编译器
-
-- Python 3.10 或更高版本
-- 本地 Hugging Face snapshot，或可访问带 immutable revision 的 Hub 仓库
-- Shape profile
-- 每个目标 CUDA 架构对应的已验证 CUBIN、tactic database 和执行计划
-
-### Runtime
-
-- x86_64 或 aarch64 SBSA Linux
-- 支持 C++20 的编译器
-- 受支持的 NVIDIA GPU 和兼容的 CUDA Driver
-- 与 AIM manifest 匹配的 CUDA Runtime、cuBLASLt 和 cuDNN
-
-## 安装
-
-克隆仓库并安装编译器：
+无需安装 package 即可运行 Python contract tests：
 
 ```bash
-git clone https://github.com/wenhuiNi/AgInfer.git
-cd AgInfer
-python3 -m pip install .
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
-如需使用 Hugging Face Hub 或 YAML profile，可安装可选依赖：
+构建默认 CUDA Runtime、native providers 和目标架构 AOT kernel bundle，然后运行
+C++ contract tests。默认目标为 `sm120`：
 
 ```bash
-python3 -m pip install '.[hub,yaml]'
-```
-
-构建 C++ Runtime：
-
-```bash
-cmake -S . -B build -DBUILD_TESTING=OFF
+git submodule update --init third_party/flashinfer
+git -C third_party/flashinfer submodule update --init 3rdparty/cccl
+cmake -S . -B build
 cmake --build build -j
+ctest --test-dir build --output-on-failure
 ```
 
-构建产物为 `libaginfer_runtime.a`。
+构建只消费固定版本的 FlashInfer 与 CCCL 源码，部署 Runtime 不依赖 Python/JIT。
+精确支持边界见 [attention provider contract](docs/flashinfer-attention.md)。
 
-## 快速开始
-
-### 1. 准备 Shape profile
-
-可以从 [examples/shape-profile.json](examples/shape-profile.json) 开始，分别为
-序列长度、图像尺寸与数量、state 长度和 action horizon 设置有界的 `min`、
-`opt` 和 `max`。Batch 固定为 1。
-
-### 2. 编译 x86_64 AIM 文件
+可用 `-DAGINFER_CUDA_ARCH=89` 或 `110` 显式选择其他支持的部署架构。如只需
+不链接 CUDA Toolkit/provider 的 contract build，可显式关闭 CUDA：
 
 ```bash
-modelc compile \
-  --source /models/groot-n1.5 \
-  --adapter groot_n1_5 \
-  --platform linux-x86_64-gnu \
-  --cuda-arch sm89 \
-  --cuda-arch sm120 \
-  --profile examples/shape-profile.json \
-  --artifact-dir /models/groot-artifacts \
-  --offline \
-  --output groot-n1.5.x86_64.sm89-sm120.aim
+cmake -S . -B build-contract -DAGINFER_ENABLE_CUDA=OFF
+cmake --build build-contract -j
+ctest --test-dir build-contract --output-on-failure
 ```
 
-Jetson AGX Thor 需要使用独立目标：
+仓库测试不代表模型级正确性或性能结论。
+
+在受支持的 GPU 上可以显式开启直接 CUDA 执行 cell；架构必须与当前设备一致：
 
 ```bash
-modelc compile \
-  --source /models/groot-n1.5 \
-  --adapter groot_n1_5 \
-  --platform linux-aarch64-sbsa \
-  --cuda-arch sm110 \
-  --profile examples/shape-profile.json \
-  --artifact-dir /models/groot-thor-artifacts \
-  --offline \
-  --output groot-n1.5.thor-sm110.aim
+cmake -S . -B build-gpu -DAGINFER_BUILD_CUDA_TESTS=ON \
+  -DAGINFER_CUDA_ARCH=120
+cmake --build build-gpu -j
+ctest --test-dir build-gpu --output-on-failure
 ```
 
-远程 Hugging Face 源需要安装 `hub` 可选依赖，并指定不可变的十六进制 commit：
+## Artifact 检查
+
+安装 Python package 后可以使用 artifact 检查命令：
 
 ```bash
-modelc compile \
-  --source nvidia/GR00T-N1.5-3B \
-  --revision <commit-hash> \
-  --adapter groot_n1_5 \
-  --platform linux-x86_64-gnu \
-  --cuda-arch sm89 \
-  --profile examples/shape-profile.json \
-  --artifact-dir /models/groot-sm89-artifacts \
-  --output groot-n1.5.sm89.aim
+python3 -m pip install .
+aginfer inspect model.aim
 ```
 
-### 3. 检查 AIM 文件
+`aginfer inspect` 会先验证实验性容器，再显示 platform、CUDA variants、manifest、
+graph metadata、tensor 数量、文件大小和 digest。实验性 `aginfer select-algorithms`、`aginfer compile` 与
+`aginfer verify` 的使用方式见[候选编译说明](docs/candidate-compilation.md)。
+原生AlgoCheck工具可生成显式离线算法选择；编译生成尚未数值验收的候选。
+选择器不计时、不宣称最快；这不是生产模型支持承诺。
+
+可以在不加载 tensor payload 或框架代码的情况下检查本地 checkpoint：
 
 ```bash
-modelc inspect groot-n1.5.x86_64.sm89-sm120.aim
+aginfer source-manifest /path/to/checkpoint --offline --output /tmp/source.json
+aginfer source-contract /path/to/checkpoint --offline
 ```
 
-该命令会先验证 AIM 文件，再输出 platform、CUDA variants、manifest、计算图、
-tensor 数量、文件大小和 SHA-256。
+第二个命令报告有类型的模型 IO、有序 processor steps、引用的 state assets，以及
+tokenizer 等尚未内置的外部资产需求。
 
-## Artifact 目录
+## Runtime 边界
 
-`--artifact-dir` 指向 toolchain 元数据，以及每个目标 CUDA 架构的独立目录：
-
-```text
-artifacts/
-├── toolchain.json
-├── sm89/
-│   ├── kernels.cubin
-│   ├── plan.json
-│   └── tactics.json
-└── sm120/
-    ├── kernels.cubin
-    ├── plan.json
-    └── tactics.json
-```
-
-- `toolchain.json` 声明支持的 CUDA Driver/Runtime 范围，以及要求的 cuBLASLt
-  和 cuDNN ABI。
-- `kernels.cubin` 必须是与当前目录架构精确匹配的 ELF CUBIN。
-- `plan.json` 包含静态 arena、workspace、shape dispatch 和 CUDA Graph template。
-- `tactics.json` 包含目标架构上已验证的算法。
-
-任一 artifact 缺失、格式错误或目标架构不匹配时，编译都会返回明确错误。
-
-## C++ 集成
-
-```cpp
-#include <aginfer/runtime.h>
-
-aginfer::RuntimeOptions runtime_options;
-auto runtime = aginfer::Runtime::Create(runtime_options);
-if (!runtime.ok()) {
-  // 输出 runtime.status().code() 和 runtime.status().message()。
-  return 1;
-}
-
-auto model = aginfer::Model::Load("model.aim");
-if (!model.ok()) {
-  // 处理 model.status()。
-  return 1;
-}
-
-aginfer::SessionOptions session_options;
-session_options.profile = "default";
-auto session = aginfer::Session::Create(
-    runtime.value(), model.value(), session_options);
-if (!session.ok()) {
-  // 处理 session.status()。
-  return 1;
-}
-
-auto target = session.value().GetTargetInfo();
-auto input_info = session.value().GetInputInfo();
-auto output_info = session.value().GetOutputInfo();
-auto workspace = session.value().GetRequiredWorkspace("default");
-
-// 根据 input_info/output_info 分配并填充 device buffer。
-std::vector<aginfer::TensorView> inputs{/* 已填充的 TensorView */};
-std::vector<aginfer::TensorView> outputs{/* 已填充的 TensorView */};
-aginfer::RunOptions run_options;
-aginfer::CudaStream stream = nullptr;  // CUDA default stream，或调用方管理的 stream。
-auto status = session.value().Enqueue(inputs, outputs, run_options, stream);
-```
-
-加载 AIM 和创建 Session 时，AgInfer 会依次校验：
-
-1. Host platform 与字节序
-2. AIM schema 与 Runtime ABI
-3. 整文件与各 section 校验和
-4. GPU 的精确 compute capability
-5. CUDA Driver 与 CUDA Runtime 兼容性
-6. cuBLASLt 与 cuDNN ABI
-
-任一条件不匹配都会返回对应的状态码，不进行 fallback。
-首次调用 `Enqueue` 时会初始化所选 CUBIN module 和静态 device allocation。
-之后的 Kernel 会异步提交到调用方提供的 stream，同步时机由调用方控制。
-
-## Checkpoint 与精度规则
-
-AgInfer 接受 safetensors、JSON/YAML 配置和标准 tokenizer/processor 元数据。
-基于 pickle 的 `.bin`、`.pt`、`.pth`、`.ckpt` 等格式会被拒绝，也不会执行模型
-仓库中的远程代码。
-
-FP32、FP16 和 BF16 tensor 会保留 checkpoint dtype。FP8 checkpoint 必须使用
-带显式 scale 的 ModelOpt Unified Hugging Face E4M3 格式。编译器不执行校准、
-scale 推导或隐式 dtype 转换。
-
-## 常见问题
-
-| 错误 | 排查方法 |
-|---|---|
-| `INCOMPATIBLE_PLATFORM` | 为 Runtime 所在的 host platform 重新生成 AIM。 |
-| `INCOMPATIBLE_ARCHITECTURE` | 编译时加入当前 GPU 精确对应的 `smXX` 变体。 |
-| `INCOMPATIBLE_ABI` | 检查 AIM 中声明的 CUDA Driver/Runtime、cuBLASLt、cuDNN 和 Runtime ABI。 |
-| `CORRUPT_PACKAGE` | 重新生成或复制 AIM；文件范围、格式或 checksum 校验失败。 |
-| Checkpoint 不安全 | 将源权重转换为 safetensors，并移除 pickle 文件。 |
-| 缺少 tactic 或 plan | 为每个目标 CUDA 架构提供已验证的 artifact。 |
-
-运行 `modelc --help` 或 `modelc compile --help` 可以查看完整 CLI 参数。
-
-## AIM 格式
-
-[AIM schema 1.0](docs/aim-v1.md) 记录容器布局；[Kernel ABI 1.0](docs/kernel-abi-v1.md)
-记录二进制执行计划、Tensor contract 和 CUDA launch 参数。
-
-## 参与贡献
-
-欢迎提交 Issue 和 Pull Request。建议保持改动范围清晰，为行为变化补充测试，
-并维持精确目标匹配和明确报错的部署原则。
+部署 Runtime 只消费已经 lower 的执行 artifact。模型导入、图重写、校准、量化、
+tactic 选择、权重变换和性能 qualification 全部属于离线构建阶段。Runtime 不得
+静默 fallback、JIT 编译、自动调优或重新 pack 权重。
 
 ## 许可证
 

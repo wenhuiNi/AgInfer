@@ -1,0 +1,18 @@
+// One translation unit produces the reviewed target-specific CUBIN module.
+// Individual implementation files remain grouped by semantic operation.
+#include "activation.cu"
+#include "action_slice.cu"
+#include "adaptive_rms_norm.cu"
+#include "cast.cu"
+#include "layer_norm.cu"
+#include "kv_pack.cu"
+#include "patch_projection.cu"
+#include "prefix_kv_store.cu"
+#include "prefix_input.cu"
+#include "pointwise.cu"
+#include "rms_norm.cu"
+#include "rounded_attention.cu"
+#include "rope.cu"
+#include "suffix_metadata.cu"
+#include "time_embedding.cu"
+#include "vision_attention.cu"

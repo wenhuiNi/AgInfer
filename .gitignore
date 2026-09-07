@@ -9,4 +9,5 @@ dist/
 *.aim
 PLAN.md
 
-
+# Machine-local development notes and investigation logs.
+/.local/

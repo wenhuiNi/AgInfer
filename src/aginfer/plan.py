@@ -91,6 +91,7 @@ def compile_execution_plan(plan: dict[str, Any], arch: CudaArch, *, weight_size:
 
         first_tensor = len(tensor_records)
         names: dict[str, int] = {}
+        port_ids: set[int] = set()
         device_names: set[str] = set()
         input_names: list[str] = []
         output_names: list[str] = []
@@ -112,6 +113,10 @@ def compile_execution_plan(plan: dict[str, Any], arch: CudaArch, *, weight_size:
                 if name in names:
                     raise ValidationError(f"profile {profile}: duplicate tensor name {name}")
                 names[name] = len(tensor_records)
+                port_id = record[5]
+                if port_id in port_ids:
+                    raise ValidationError(f"profile {profile}: duplicate numeric port ID {port_id}")
+                port_ids.add(port_id)
                 if record[2] == LOCATION_IDS["device"]:
                     device_names.add(name)
                 collected_names.append(name)
@@ -186,11 +191,11 @@ def compile_execution_plan(plan: dict[str, Any], arch: CudaArch, *, weight_size:
     output = bytearray(header)
     for record in profile_records:
         output.extend(PROFILE_STRUCT.pack(*record, b"\0" * 40))
-    for name, dtype, location, io_kind, rank, flags, byte_size, shape, stride in tensor_records:
+    for name, dtype, location, io_kind, rank, port_id, byte_size, shape, stride in tensor_records:
         padded_shape = shape + (0,) * (MAX_TENSOR_RANK - rank)
         padded_stride = stride + (0,) * (MAX_TENSOR_RANK - rank)
         output.extend(
-            TENSOR_STRUCT.pack(name, dtype, location, io_kind, rank, flags, byte_size, *padded_shape, *padded_stride)
+            TENSOR_STRUCT.pack(name, dtype, location, io_kind, rank, port_id, byte_size, *padded_shape, *padded_stride)
         )
     for kernel, profile, first_arg, arg_count, grid, block, shared, flags in launch_records:
         output.extend(
@@ -274,7 +279,7 @@ def _compile_tensor(
         LOCATION_IDS[location_name],
         IO_IDS[io_kind],
         len(shape),
-        0,
+        _unsigned(spec.get("id"), f"{label}.id", maximum=2**32 - 1),
         byte_size,
         shape,
         stride,

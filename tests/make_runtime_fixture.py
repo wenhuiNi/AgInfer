@@ -5,7 +5,7 @@ import sys
 import struct
 from pathlib import Path
 
-from aginfer.aim import AimWriter, VariantPayload
+from aginfer.aim import AimWriter, Compatibility, ProviderRequirement, VariantPayload
 from aginfer.plan import compile_execution_plan
 from aginfer.schema import CudaArch, Platform
 
@@ -23,11 +23,11 @@ def main() -> int:
                     {
                         "profile": "default",
                         "inputs": [
-                            {"name": "input_ids", "dtype": "I32", "shape": [1]},
-                            {"name": "pixel_values", "dtype": "F16", "shape": [1]},
-                            {"name": "state", "dtype": "F16", "shape": [1]},
+                            {"id": 0, "name": "input_ids", "dtype": "I32", "shape": [1]},
+                            {"id": 1, "name": "pixel_values", "dtype": "F16", "shape": [1]},
+                            {"id": 2, "name": "state", "dtype": "F16", "shape": [1]},
                         ],
-                        "outputs": [{"name": "actions", "dtype": "F16", "shape": [1]}],
+                        "outputs": [{"id": 3, "name": "actions", "dtype": "F16", "shape": [1]}],
                         "launches": [
                             {"kernel": "noop", "grid": [1, 1, 1], "block": [1, 1, 1], "arguments": []}
                         ],
@@ -38,21 +38,13 @@ def main() -> int:
             arch,
             weight_size=7,
         ).data
-    manifest = {
-        "runtime_abi": 1,
-        "toolchain": {
-            "cuda_driver_min": 12000,
-            "cuda_runtime_min": 12000,
-            "cuda_runtime_max": 12999,
-            "cublaslt_abi": 12,
-            "cudnn_abi": 9,
-        },
-    }
+    manifest = {"model_family": "runtime_contract_fixture"}
     def cubin(arch: int) -> bytes:
         header = bytearray(64)
         header[:16] = b"\x7fELF\x02\x01\x01\x33\x07" + b"\0" * 7
         struct.pack_into("<HHI", header, 16, 2, 190, 124)
-        struct.pack_into("<I", header, 48, arch | (arch << 16))
+        flags = (arch << 8) | 2 if arch >= 100 else arch | (arch << 16)
+        struct.pack_into("<I", header, 48, flags)
         struct.pack_into("<H", header, 52, 64)
         return bytes(header)
 
@@ -62,6 +54,15 @@ def main() -> int:
         manifest=manifest,
         graph={"opset": 1},
         tensors={"count": 0, "items": []},
+        compatibility=Compatibility(
+            cuda_driver_min=12000,
+            cuda_runtime_min=12000,
+            cuda_runtime_max=12999,
+            providers=(
+                ProviderRequirement(1, 12, 12),
+                ProviderRequirement(2, 9, 9),
+            ),
+        ),
         variants=[
             VariantPayload(CudaArch.SM89, cubin(89), b"weights", plan(CudaArch.SM89)),
             VariantPayload(CudaArch.SM120, cubin(120), b"weights", plan(CudaArch.SM120)),

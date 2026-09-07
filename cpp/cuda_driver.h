@@ -1,6 +1,6 @@
 #pragma once
 
-#include "aginfer/runtime.h"
+#include "status.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +8,8 @@
 #include <string>
 
 namespace aginfer::internal {
+
+using CudaStream = void*;
 
 using CuDevicePtr = std::uint64_t;
 using CuModule = void*;
@@ -28,6 +30,7 @@ class CudaDriver {
   StatusOr<CuDevicePtr> Allocate(std::uint64_t bytes);
   Status Free(CuDevicePtr pointer);
   Status CopyHostToDevice(CuDevicePtr destination, const void* source, std::size_t bytes);
+  Status Zero(CuDevicePtr destination, std::size_t bytes);
   Status Launch(CuFunction function, const std::uint32_t grid[3],
                 const std::uint32_t block[3], std::uint32_t shared_bytes,
                 CudaStream stream, void** arguments);
@@ -40,4 +43,3 @@ class CudaDriver {
 };
 
 }  // namespace aginfer::internal
-

@@ -6,20 +6,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aginfer.checkpoint import load_checkpoint, pack_weights
+from aginfer.checkpoint import load_checkpoint
 from aginfer.errors import ValidationError
 from tests.helpers import create_checkpoint
 
 
 class CheckpointTests(unittest.TestCase):
-    def test_reads_and_packs_safetensors_without_casting(self) -> None:
+    def test_reads_safetensors_metadata_without_loading_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = load_checkpoint(str(create_checkpoint(Path(directory) / "checkpoint")), offline=True)
+            self.assertIsNone(checkpoint.revision)
             self.assertEqual(checkpoint.dtypes, {"F16"})
-            blob, table = pack_weights(checkpoint.tensors)
-            self.assertEqual(blob, bytes(range(8)))
-            self.assertEqual(table[0]["dtype"], "F16")
-            self.assertEqual(table[0]["stride"], [2, 1])
+            self.assertEqual(len(checkpoint.tensors), 1)
+            tensor = checkpoint.tensors[0]
+            self.assertEqual(tensor.name, "layer.weight")
+            self.assertEqual(tensor.shape, (2, 2))
+            self.assertEqual(tensor.byte_length, 8)
+
+    def test_local_revision_is_optional_metadata_not_a_directory_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = create_checkpoint(Path(directory) / "checkpoint")
+            checkpoint = load_checkpoint(str(root), revision="working-copy", offline=True)
+            self.assertEqual(checkpoint.revision, "working-copy")
 
     def test_rejects_pickle_even_when_safetensors_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -40,4 +48,3 @@ class CheckpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

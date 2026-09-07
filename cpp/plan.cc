@@ -52,8 +52,8 @@ Status ValidateTensor(const ParsedPlan& plan, const PlanTensor& tensor,
   if (tensor.io_kind != static_cast<std::uint32_t>(PlanIoKind::kInput) &&
       tensor.io_kind != static_cast<std::uint32_t>(PlanIoKind::kOutput))
     return Error("execution plan tensor " + std::to_string(index) + " has an invalid I/O kind");
-  if (tensor.rank == 0 || tensor.rank > kMaxTensorRank || tensor.flags != 0)
-    return Error("execution plan tensor " + std::to_string(index) + " has an invalid rank or flags");
+  if (tensor.rank == 0 || tensor.rank > kMaxTensorRank)
+    return Error("execution plan tensor " + std::to_string(index) + " has an invalid rank");
   std::uint64_t last_element = 0;
   for (std::uint32_t dimension = 0; dimension < tensor.rank; ++dimension) {
     if (tensor.shape[dimension] <= 0 || tensor.stride[dimension] <= 0)
@@ -181,6 +181,8 @@ Status ParsePlan(const std::uint8_t* data, std::size_t size,
         const PlanTensor& other = parsed.tensors[profile.first_tensor + previous];
         if (parsed.String(other.name_offset) == parsed.String(tensor.name_offset))
           return Error("execution plan profile contains duplicate tensor names");
+        if (other.port_id == tensor.port_id)
+          return Error("execution plan profile contains duplicate numeric port IDs");
       }
     }
     if (input_count == 0 || output_count == 0)

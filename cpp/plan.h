@@ -1,6 +1,6 @@
 #pragma once
 
-#include "aginfer/runtime.h"
+#include "status.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -61,7 +61,7 @@ struct PlanTensor {
   std::uint32_t location;
   std::uint32_t io_kind;
   std::uint32_t rank;
-  std::uint32_t flags;
+  std::uint32_t port_id;
   std::uint64_t byte_size;
   std::int64_t shape[kMaxTensorRank];
   std::int64_t stride[kMaxTensorRank];
@@ -114,4 +114,3 @@ Status ParsePlan(const std::uint8_t* data, std::size_t size,
                  ParsedPlan* output);
 
 }  // namespace aginfer::internal
-

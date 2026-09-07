@@ -38,6 +38,7 @@ struct CudaDriver::Impl {
   CuResult (*mem_alloc)(CuDevicePtr*, std::size_t) = nullptr;
   CuResult (*mem_free)(CuDevicePtr) = nullptr;
   CuResult (*memcpy_htod)(CuDevicePtr, const void*, std::size_t) = nullptr;
+  CuResult (*memset_d8)(CuDevicePtr, unsigned char, std::size_t) = nullptr;
   CuResult (*launch_kernel)(CuFunction, unsigned, unsigned, unsigned,
                             unsigned, unsigned, unsigned, unsigned,
                             CuStream, void**, void**) = nullptr;
@@ -94,12 +95,13 @@ StatusOr<CudaDriver> CudaDriver::Create(std::uint32_t expected_arch) {
   impl->mem_alloc = Symbol<decltype(impl->mem_alloc)>(impl->library, "cuMemAlloc_v2");
   impl->mem_free = Symbol<decltype(impl->mem_free)>(impl->library, "cuMemFree_v2");
   impl->memcpy_htod = Symbol<decltype(impl->memcpy_htod)>(impl->library, "cuMemcpyHtoD_v2");
+  impl->memset_d8 = Symbol<decltype(impl->memset_d8)>(impl->library, "cuMemsetD8_v2");
   impl->launch_kernel = Symbol<decltype(impl->launch_kernel)>(impl->library, "cuLaunchKernel");
   if (init == nullptr || device_get == nullptr || attribute_get == nullptr || context_get == nullptr ||
       primary_retain == nullptr || impl->ctx_set_current == nullptr || impl->primary_release == nullptr ||
       impl->module_load_data == nullptr || impl->module_get_function == nullptr || impl->module_unload == nullptr ||
       impl->mem_alloc == nullptr || impl->mem_free == nullptr || impl->memcpy_htod == nullptr ||
-      impl->launch_kernel == nullptr)
+      impl->launch_kernel == nullptr || impl->memset_d8 == nullptr)
     return Status(StatusCode::kCudaError, "CUDA Driver library is missing required symbols");
 
   CuResult result = init(0);
@@ -198,6 +200,14 @@ Status CudaDriver::Launch(CuFunction function, const std::uint32_t grid[3],
       shared_bytes, reinterpret_cast<CuStream>(stream), arguments, nullptr);
   if (result != kCudaSuccess)
     return Status(StatusCode::kCudaError, impl_->ErrorText(result, "cuLaunchKernel"));
+  return Status::Ok();
+}
+
+Status CudaDriver::Zero(CuDevicePtr destination, std::size_t bytes) {
+  if (bytes == 0) return Status::Ok();
+  const auto result = impl_->memset_d8(destination, 0, bytes);
+  if (result != kCudaSuccess)
+    return Status(StatusCode::kCudaError, impl_->ErrorText(result, "cuMemsetD8"));
   return Status::Ok();
 }
 
