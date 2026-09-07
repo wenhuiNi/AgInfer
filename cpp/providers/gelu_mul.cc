@@ -45,14 +45,17 @@ Status PrepareGeluMul(std::span<const std::uint8_t> payload, std::span<const Com
     auto input = reinterpret_cast<std::uintptr_t>(b[i].data);
     if (output <= input ? input - output < bytes : output - input < bytes*(p.packed_width ? 2 : 1)) return bad();
   }
-  auto function = module.driver->GetFunction(module.module,
-      p.packed_width ? "aginfer_gelu_tanh_mul_packed_bf16" : "aginfer_gelu_tanh_mul_bf16");
+  auto function = module.driver->GetFunction(module.module, p.packed_tiled
+      ? "aginfer_gelu_tanh_mul_packed_tiled_bf16"
+      : p.packed_width ? "aginfer_gelu_tanh_mul_packed_bf16" : "aginfer_gelu_tanh_mul_bf16");
   if (!function.ok()) return function.status();
   auto command = std::make_unique<GeluMul>();
   command->driver = module.driver; command->function = function.value(); command->numel = p.numel;
   command->packed_width = p.packed_width;
   for (int i = 0; i < count; ++i) command->pointers[i] = b[i].data;
   command->grid = {static_cast<std::uint32_t>(std::min<std::uint64_t>((p.numel + 255) / 256, 4096)), 1, 1};
+  if (p.packed_tiled) command->grid = {(p.packed_width + 255) / 256,
+      static_cast<std::uint32_t>(p.numel / p.packed_width), 1};
   *out = std::move(command);
   return Status::Ok();
 }

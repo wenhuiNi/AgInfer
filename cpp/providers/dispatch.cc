@@ -129,8 +129,8 @@ Status PrepareProviderCommand(const CommandRecordView& record,
     if (!Access(b, "rrrw")) return Refused("rounded multiply-add operand contract mismatch");
     return PrepareRoundedMulAdd(payload, b, module, output);
   }
-  if (Magic(payload, "AIGMU1\0") || Magic(payload, "AIGMP1\0")) {
-    if (!Access(b, Magic(payload, "AIGMP1\0") ? "rw" : "rrw")) return Refused("GELU-multiply operand contract mismatch");
+  if (Magic(payload, "AIGMU1\0") || Magic(payload, "AIGMP1\0") || Magic(payload, "AIGMT1\0")) {
+    if (!Access(b, Magic(payload, "AIGMU1\0") ? "rrw" : "rw")) return Refused("GELU-multiply operand contract mismatch");
     return PrepareGeluMul(payload, b, module, output);
   }
   if (Magic(payload, "AIPSP1\0")) {

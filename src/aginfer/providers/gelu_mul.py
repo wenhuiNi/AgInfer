@@ -13,6 +13,7 @@ from ..schema import CudaArch
 PAYLOAD = struct.Struct('<8sHHIQQ32sI60s')
 MAGIC = b'AIGMU1\0\0'
 PACKED_MAGIC = b'AIGMP1\0\0'
+TILED_MAGIC = b'AIGMT1\0\0'
 MAX_NUMEL = 1 << 26
 
 
@@ -21,6 +22,7 @@ class GeluMulProblem:
     target_arch: CudaArch
     numel: int
     packed_width: int = 0
+    packed_tiled: bool = False
 
     def __post_init__(self):
         if self.target_arch != CudaArch.SM120 or type(self.numel) is not int or not 1 <= self.numel <= MAX_NUMEL:
@@ -28,6 +30,8 @@ class GeluMulProblem:
         if (type(self.packed_width) is not int or not 0 <= self.packed_width <= 32768
                 or (self.packed_width and (self.numel % self.packed_width or self.numel // self.packed_width > 128))):
             raise ValidationError('packed GELU-multiply requires bounded row-major dual projections')
+        if type(self.packed_tiled) is not bool or (self.packed_tiled and not self.packed_width):
+            raise ValidationError('tiled GELU-multiply requires a packed width')
 
 
 @dataclass(frozen=True)
@@ -44,7 +48,8 @@ class GeluMulPayload:
             raise ValidationError('invalid GELU-multiply module identity')
 
     def to_bytes(self):
-        return PAYLOAD.pack(PACKED_MAGIC if self.problem.packed_width else MAGIC, 1, 0,
+        magic = TILED_MAGIC if self.problem.packed_tiled else PACKED_MAGIC if self.problem.packed_width else MAGIC
+        return PAYLOAD.pack(magic, 1, 0,
                             int(self.problem.target_arch), self.problem.numel,
                             self.module_bytes, bytes.fromhex(self.module_sha256), self.problem.packed_width, bytes(60))
 
@@ -54,7 +59,7 @@ class GeluMulPayload:
             if len(data) != PAYLOAD.size:
                 raise ValueError('size')
             f = PAYLOAD.unpack(data)
-            result = cls(GeluMulProblem(CudaArch(f[3]), f[4], f[7]), f[5], f[6].hex())
+            result = cls(GeluMulProblem(CudaArch(f[3]), f[4], f[7], f[0] == TILED_MAGIC), f[5], f[6].hex())
             if result.to_bytes() != bytes(data):
                 raise ValueError('noncanonical')
             return result
@@ -122,7 +127,7 @@ def lower_gelu_mul(schedule, module_bytes, module_sha256, *, packed=False):
                 if (source_id not in exported and len(consumers.get(source_id, ())) == 2
                         and source.dtype == t.dtype and source.device == t.device and source.layout == t.layout
                         and source.shape == (1, t.shape[1], 2*t.shape[2])):
-                    problem = GeluMulProblem(CudaArch.SM120, math.prod(t.shape), t.shape[2])
+                    problem = GeluMulProblem(CudaArch.SM120, math.prod(t.shape), t.shape[2], True)
                     reads, source_types = (source_id,), (source,)
                     covered = tuple(sorted((*covered, gate_slice.execution_index, up_slice.execution_index)))
         payload = GeluMulPayload(problem, module_bytes, module_sha256).to_bytes()

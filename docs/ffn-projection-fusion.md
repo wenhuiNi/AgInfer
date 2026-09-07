@@ -15,10 +15,19 @@ Weights are concatenated offline in gate-then-up output-channel order using
 the existing streamed derived-constant packer. One fixed cuBLASLt GEMM emits
 `[1, rows, 2*width]`. ProgramIR retains ordinary slices/GELU/mul as semantics;
 the provider covers all four with one packed activation command, so there are
-no runtime split copies. The `AIGMP1` payload binds numel, width and exact module
+no runtime split copies. The packed payload binds numel, width and exact module
 identity; `AIGMU1` remains byte-compatible for separate input buffers. The
 packed form accepts a doubled read buffer and a distinct output buffer, checks
 the full input span for overlap, and preserves GELU's BF16 intermediate rounding.
+
+New compilation uses `AIGMT1`: grid.y selects the row and grid.x selects a
+256-column tile, removing per-element division/modulo when locating packed
+halves. A distinct kernel symbol preserves compatibility: existing `AIGMP1`
+packages still launch their embedded one-dimensional kernel with its original
+grid. Changing only the launch shape of an old embedded kernel is not safe.
+Both forms cover odd-width tails and retain identical element arithmetic.
+Fewer indexing instructions alone do not establish an E2E speedup; require
+paired timing on the deployed shape and Graph policy.
 
 Large-row prefix projections, nonzero bias, shared/exported intermediates and
 unrelated paired linears stay unchanged. The compiler's exact native forms

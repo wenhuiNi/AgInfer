@@ -37,6 +37,8 @@ int main(int argc, char** argv) { try {
   Check(!ParseGeluMulPayload(payload.data(),127,&p).ok());
   auto packed_contract=payload; packed_contract[4]='P'; Put64(packed_contract,64,4096);
   Check(ParseGeluMulPayload(packed_contract.data(),128,&p).ok() && p.packed_width==4096);
+  auto tiled_contract=packed_contract;tiled_contract[4]='T';
+  Check(ParseGeluMulPayload(tiled_contract.data(),128,&p).ok() && p.packed_tiled);
   for(auto width:{0ULL,1ULL,32769ULL}) {
     auto bad=packed_contract; Put64(bad,64,width);
     Check(!ParseGeluMulPayload(bad.data(),128,&p).ok());
@@ -88,9 +90,9 @@ int main(int argc, char** argv) { try {
       }
     };
     compare();
-    if(n==37 || n==204800) {
+    if(n==37 || n==204800) for(char form:{'P','T'}) {
       auto packed_payload=payload;
-      packed_payload[4]='P'; Put64(packed_payload,64,n==37?37:4096);
+      packed_payload[4]=form; Put64(packed_payload,64,n==37?37:4096);
       GeluMulPayloadView pp;
       Check(ParseGeluMulPayload(packed_payload.data(),128,&pp).ok());
       std::vector<std::uint16_t> packed(2*n);
@@ -121,7 +123,7 @@ int main(int argc, char** argv) { try {
       }
       Check(cudaGraphExecDestroy(pe)==cudaSuccess); Check(cudaGraphDestroy(pg)==cudaSuccess);
       pc.reset(); Check(cudaFree(pb[0].data)==cudaSuccess);
-      std::cout<<"packed bitexact numel="<<n<<'\n';
+      std::cout<<"packed form="<<form<<" bitexact numel="<<n<<'\n';
     }
     cudaGraph_t graph; cudaGraphExec_t executable;
     Check(cudaStreamBeginCapture(stream,cudaStreamCaptureModeThreadLocal)==cudaSuccess);

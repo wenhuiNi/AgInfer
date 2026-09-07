@@ -94,6 +94,11 @@ class GeluMulTests(unittest.TestCase):
         bad = bytearray(p.to_bytes()); bad[:8] = b'AIGMU1\0\0'
         with self.assertRaises(FormatError):
             GeluMulPayload.from_bytes(bad)
+        tiled=replace(p,problem=replace(p.problem,packed_tiled=True))
+        self.assertTrue(tiled.to_bytes().startswith(b'AIGMT1'))
+        self.assertEqual(GeluMulPayload.from_bytes(tiled.to_bytes()),tiled)
+        with self.assertRaises(ValidationError):
+            GeluMulProblem(CudaArch.SM120,37,0,True)
 
 
 if __name__ == '__main__':

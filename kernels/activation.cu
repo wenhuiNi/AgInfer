@@ -95,3 +95,16 @@ extern "C" __global__ void aginfer_gelu_tanh_mul_packed_bf16(
     output[i] = __float2bfloat16_rn(__bfloat162float(rounded) * __bfloat162float(packed[index + width]));
   }
 }
+
+extern "C" __global__ void aginfer_gelu_tanh_mul_packed_tiled_bf16(
+    const __nv_bfloat16* packed, __nv_bfloat16* output,
+    std::uint64_t numel, std::uint32_t width) {
+  const auto column = blockIdx.x * blockDim.x + threadIdx.x;
+  const auto row_offset = static_cast<std::uint64_t>(blockIdx.y) * width;
+  if (column < width && row_offset < numel) {
+    const auto index = 2 * row_offset + column;
+    const auto rounded = __float2bfloat16_rn(GeluTanh(__bfloat162float(packed[index])));
+    output[row_offset + column] = __float2bfloat16_rn(
+        __bfloat162float(rounded) * __bfloat162float(packed[index + width]));
+  }
+}
