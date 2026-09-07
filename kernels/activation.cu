@@ -83,3 +83,15 @@ extern "C" __global__ void aginfer_gelu_tanh_mul_bf16(
     output[i] = __float2bfloat16_rn(__bfloat162float(rounded) * __bfloat162float(up[i]));
   }
 }
+
+extern "C" __global__ void aginfer_gelu_tanh_mul_packed_bf16(
+    const __nv_bfloat16* packed, __nv_bfloat16* output,
+    std::uint64_t numel, std::uint32_t width) {
+  const std::uint64_t first = static_cast<std::uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::uint64_t stride = static_cast<std::uint64_t>(blockDim.x) * gridDim.x;
+  for (std::uint64_t i = first; i < numel; i += stride) {
+    const auto index = (i / width) * (2 * width) + i % width;
+    const auto rounded = __float2bfloat16_rn(GeluTanh(__bfloat162float(packed[index])));
+    output[i] = __float2bfloat16_rn(__bfloat162float(rounded) * __bfloat162float(packed[index + width]));
+  }
+}

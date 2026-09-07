@@ -45,7 +45,7 @@ def validate_kernel_record(record, cubin):
 
 def compile_source(source_path, *, output, cubin_path, kernel_record_path, algorithms_path,
                    frontend="pi05", scratch=None, selection_report_path=None, fuse_projections=False, resident_kv=False,
-                   constant_evaluator=None, fuse_gelu_mul=False):
+                   constant_evaluator=None, fuse_gelu_mul=False, fuse_ffn=False):
     if frontend != "pi05":
         raise ValidationError("no delivered source frontend for this request")
     output = Path(output)
@@ -64,9 +64,9 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
     source = open_source_package(str(source_path), offline=True)
     imported = Pi05SourceFrontend().import_program(source)
     program, constants, fusion = imported.program, source.constants, None
-    if fuse_projections:
+    if fuse_projections or fuse_ffn:
         from .projection_fusion import fuse_projections as transform, FusionConstantView
-        fusion = transform(program)
+        fusion = transform(program, qkv=fuse_projections, ffn=fuse_ffn)
         program = fusion.program
         constants = FusionConstantView(source.constants, fusion.constants)
     resident = None
@@ -81,7 +81,7 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
             hashlib.sha256(dump_program(program).encode()).hexdigest())
     source_files = {asset.path: file_identity(source.assets.root / asset.path) for asset in source.manifest.assets}
     inventory, schedule, memory, commands, literals, capabilities, placements = lower_native_program(
-        program, cubin, algorithms, include_placements=True, fuse_gelu_mul=fuse_gelu_mul)
+        program, cubin, algorithms, include_placements=True, fuse_gelu_mul=fuse_gelu_mul, fuse_ffn=fuse_ffn)
     with tempfile.TemporaryDirectory(prefix="aginfer-compile-", dir=scratch) as temporary:
         root = Path(temporary)
         # Freeze the exact kernel bytes read above against concurrent source edits.

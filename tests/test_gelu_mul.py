@@ -84,6 +84,17 @@ class GeluMulTests(unittest.TestCase):
         with self.assertRaises(FormatError):
             GeluMulPayload.from_bytes(data[:-1])
 
+    def test_packed_payload_has_distinct_magic_and_strict_width(self):
+        p = GeluMulPayload(GeluMulProblem(CudaArch.SM120, 204800, 4096), 64000, '6' * 64)
+        self.assertEqual(GeluMulPayload.from_bytes(p.to_bytes()), p)
+        self.assertTrue(p.to_bytes().startswith(b'AIGMP1'))
+        for numel, width in ((37, 8), (204800, 1), (32769, 32769), (37, -1)):
+            with self.assertRaises(ValidationError):
+                GeluMulProblem(CudaArch.SM120, numel, width)
+        bad = bytearray(p.to_bytes()); bad[:8] = b'AIGMU1\0\0'
+        with self.assertRaises(FormatError):
+            GeluMulPayload.from_bytes(bad)
+
 
 if __name__ == '__main__':
     unittest.main()

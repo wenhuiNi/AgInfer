@@ -58,7 +58,7 @@ class FixedAlgorithms:
         return cls(linear, patch, tuple(sorted(attention, key=lambda x: x.variant)))
 
 
-def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, include_placements=False, fuse_gelu_mul=False):
+def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, include_placements=False, fuse_gelu_mul=False, fuse_ffn=False):
     arch = CudaArch.SM120
     digest = hashlib.sha256(cubin).hexdigest()
     if any(x.module_bytes != len(cubin) or x.module_sha256 != digest for x in algorithms.attention):
@@ -125,8 +125,8 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, 
         split = lower_projection_splits(schedule, len(cubin), digest)
         if split.commands:
             lowered["projection_split"] = split
-        if fuse_gelu_mul:
-            fused = lower_gelu_mul(schedule, len(cubin), digest)
+        if fuse_gelu_mul or fuse_ffn:
+            fused = lower_gelu_mul(schedule, len(cubin), digest, packed=fuse_ffn)
             if fused.commands:
                 lowered["gelu_mul"] = fused
                 indices = {i for c in fused.commands for i in c.fused_execution_indices}

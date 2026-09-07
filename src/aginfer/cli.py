@@ -53,6 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="offline merge three shared-input small-row BF16 projections")
     compile_parser.add_argument("--fuse-projections", action="store_true",
         help="use the same projection fusion policy as algorithm selection")
+    for subparser in (compile_parser, selection_parser):
+        subparser.add_argument("--fuse-ffn", action="store_true",
+            help="merge small-row BF16 gate/up projections and consume packed output in fused GELU/mul")
     selection_parser.add_argument("--workspace-limit", type=int, default=4 * 1024 * 1024,
         help="offline linear/patch GEMM workspace cap in bytes (default: 4194304)")
 
@@ -88,12 +91,12 @@ def main(argv: list[str] | None = None) -> int:
                 kernel_record_path=args.kernel_build_record, algorithms_path=args.algorithms,
                 frontend=args.frontend, scratch=args.scratch, selection_report_path=args.selection_report,
                 fuse_projections=args.fuse_projections, resident_kv=args.resident_kv,
-                constant_evaluator=args.constant_evaluator, fuse_gelu_mul=args.fuse_gelu_mul)
+                constant_evaluator=args.constant_evaluator, fuse_gelu_mul=args.fuse_gelu_mul, fuse_ffn=args.fuse_ffn)
         elif args.command == "select-algorithms":
             from .compiler.selection import select_source_algorithms
             output = select_source_algorithms(args.source, cubin_path=args.cubin, selector_path=args.selector,
                 output=args.output, report_path=args.report, workspace_limit=args.workspace_limit,
-                fuse_projections=args.fuse_projections, resident_kv=args.resident_kv)
+                fuse_projections=args.fuse_projections, resident_kv=args.resident_kv, fuse_ffn=args.fuse_ffn)
         elif args.command == "verify":
             from .compiler.verify import verify_artifact
             output = verify_artifact(args.aim, require_build_record=args.require_build_record)

@@ -7,6 +7,7 @@ from aginfer.errors import FormatError, ValidationError
 from aginfer.ir import DType, Device, Function, Op, Program, Region, TensorType, Value, attributes, dump_program
 from aginfer.lowering import build_execution_schedule, placements_from_partial_lowering
 from aginfer.providers.projection_split import ProjectionSplitPayload, ProjectionSplitProblem, lower_projection_splits
+from aginfer.providers.gelu_mul import lower_gelu_mul
 from aginfer.schema import CudaArch
 
 
@@ -25,6 +26,35 @@ def projection_program(rows=50, widths=(32, 8, 8), bias=0.0, dtype=DType.BF16, n
 
 
 class ProjectionFusionTests(unittest.TestCase):
+    def test_ffn_gate_up_merge_and_packed_activation(self):
+        for reverse in (False, True):
+            p = projection_program(widths=(32, 32))
+            f = p.functions[0]; t = f.body.ops[-1].outputs[0].type
+            gate, up = ('y1', 'y0') if reverse else ('y0', 'y1')
+            ops = f.body.ops + (Op('gelu', (gate,), (Value('act', t),), attributes(approximation='tanh')),
+                                Op('mul', ('act', up), (Value('out', t),)))
+            p = replace(p, functions=(replace(f, outputs=('out',), body=Region(ops)),))
+            fused = fuse_projections(p, qkv=False, ffn=True)
+            self.assertEqual(len(fused.groups), 1)
+            self.assertEqual(fused.groups[0]['widths'], [32, 32])
+            weight = fused.constants[fused.groups[0]['weight']]
+            self.assertEqual(weight['parts'][0]['name'], 'w1' if reverse else 'w0')
+            s = build_execution_schedule(fused.program)
+            lowered = lower_gelu_mul(s, 64000, '6' * 64, packed=True)
+            self.assertEqual(len(lowered.commands), 1)
+            command = lowered.commands[0]
+            self.assertEqual(len(command.fused_execution_indices), 4)
+            self.assertEqual(len(command.command.operands), 2)
+            self.assertEqual(decode_command_payload(command.command).problem.packed_width, 32)
+            # Original gate, up and activated values must not escape this seam.
+            for name in ('act', gate, up):
+                exposed = replace(p, functions=(replace(p.functions[0], outputs=('out', name)),))
+                self.assertFalse(fuse_projections(exposed, qkv=False, ffn=True).groups)
+
+    def test_two_unrelated_projections_are_not_ffn(self):
+        self.assertFalse(fuse_projections(projection_program(widths=(32, 32)), ffn=True).groups)
+        self.assertFalse(fuse_projections(projection_program(), qkv=False, ffn=True).groups)
+
     def test_shared_input_fusion_preserves_outputs_and_is_deterministic(self):
         for name, widths in (('decoder', (32, 8, 8)), ('diffusion', (16, 16, 16))):
             p = projection_program(name=name, widths=widths)

@@ -35,6 +35,12 @@ int main(int argc, char** argv) { try {
     Check(!ParseGeluMulPayload(bad.data(),bad.size(),&p).ok());
   }
   Check(!ParseGeluMulPayload(payload.data(),127,&p).ok());
+  auto packed_contract=payload; packed_contract[4]='P'; Put64(packed_contract,64,4096);
+  Check(ParseGeluMulPayload(packed_contract.data(),128,&p).ok() && p.packed_width==4096);
+  for(auto width:{0ULL,1ULL,32769ULL}) {
+    auto bad=packed_contract; Put64(bad,64,width);
+    Check(!ParseGeluMulPayload(bad.data(),128,&p).ok());
+  }
 #ifdef TEST_CUDA
   Check(argc==3);
   auto cubin=Read(argv[2]);
@@ -82,6 +88,41 @@ int main(int argc, char** argv) { try {
       }
     };
     compare();
+    if(n==37 || n==204800) {
+      auto packed_payload=payload;
+      packed_payload[4]='P'; Put64(packed_payload,64,n==37?37:4096);
+      GeluMulPayloadView pp;
+      Check(ParseGeluMulPayload(packed_payload.data(),128,&pp).ok());
+      std::vector<std::uint16_t> packed(2*n);
+      for(std::size_t i=0;i<n;++i) {
+        auto j=(i/pp.packed_width)*(2*pp.packed_width)+i%pp.packed_width;
+        packed[j]=input[i]; packed[j+pp.packed_width]=up[i];
+      }
+      std::array<CommandBuffer,2> pb{CommandBuffer{nullptr,4*n,CommandOperandAccess::kRead},b[2]};
+      Check(cudaMalloc(&pb[0].data,4*n)==cudaSuccess);
+      Check(cudaMemcpy(pb[0].data,packed.data(),4*n,cudaMemcpyHostToDevice)==cudaSuccess);
+      Check(cudaStreamSynchronize(nullptr)==cudaSuccess);
+      std::unique_ptr<PreparedCommand> pc;
+      Check(PrepareGeluMul(packed_payload,pb,module,&pc).ok());
+      Check(pc->Execute(stream).ok()); Check(cudaStreamSynchronize(stream)==cudaSuccess); compare();
+      cudaGraph_t pg; cudaGraphExec_t pe;
+      Check(cudaStreamBeginCapture(stream,cudaStreamCaptureModeThreadLocal)==cudaSuccess);
+      Check(pc->Execute(stream).ok()); Check(cudaStreamEndCapture(stream,&pg)==cudaSuccess);
+      Check(cudaGraphInstantiate(&pe,pg,0)==cudaSuccess);
+      Check(cudaMemsetAsync(pb[1].data,0xff,2*n,stream)==cudaSuccess);
+      Check(cudaGraphLaunch(pe,stream)==cudaSuccess); Check(cudaStreamSynchronize(stream)==cudaSuccess); compare();
+      for(int variant=0;variant<3;++variant) {
+        auto bad=pb;
+        if(variant==0)bad[0].bytes-=2;
+        if(variant==1)bad[1].data=static_cast<char*>(bad[0].data)+2*n;
+        if(variant==2)bad[0].access=CommandOperandAccess::kWrite;
+        std::unique_ptr<PreparedCommand> rejected;
+        Check(!PrepareGeluMul(packed_payload,bad,module,&rejected).ok());
+      }
+      Check(cudaGraphExecDestroy(pe)==cudaSuccess); Check(cudaGraphDestroy(pg)==cudaSuccess);
+      pc.reset(); Check(cudaFree(pb[0].data)==cudaSuccess);
+      std::cout<<"packed bitexact numel="<<n<<'\n';
+    }
     cudaGraph_t graph; cudaGraphExec_t executable;
     Check(cudaStreamBeginCapture(stream,cudaStreamCaptureModeThreadLocal)==cudaSuccess);
     Check(command->Execute(stream).ok());

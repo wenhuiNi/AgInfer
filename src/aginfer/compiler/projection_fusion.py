@@ -21,17 +21,22 @@ class FusionResult:
     program: object
     constants: dict
     groups: tuple
+    policy: str = POLICY
 
     def report(self):
-        return {"policy": POLICY, "static_groups": list(self.groups), "constants": self.constants}
+        return {"policy": self.policy, "static_groups": list(self.groups), "constants": self.constants}
 
 
-def fuse_projections(program):
+def fuse_projections(program, *, qkv=True, ffn=False):
     verify_program(program)
     constants, receipts, functions = {}, [], []
     for function in program.functions:
         ops = function.body.ops
         producers = {v.value_id: op for op in ops for v in op.outputs}
+        consumers = {}
+        for op in ops:
+            for v in op.inputs:
+                consumers.setdefault(v, []).append(op)
         types = {v.value_id: v.type for op in ops for v in op.outputs}
         types.update({v.value_id: v.type for v in function.inputs})
         if any(op.opcode == "constant_ref" and op.attribute("namespace") == NAMESPACE for op in ops):
@@ -52,11 +57,34 @@ def fuse_projections(program):
         insertions, removed = {}, set()
         for input_id, group in candidates.items():
             t = types[input_id]
-            if (len(group) != 3 or t.dtype != DType.BF16 or t.device != Device.CUDA
+            is_ffn = len(group) == 2 and ffn
+            if ((not is_ffn and not (len(group) == 3 and qkv)) or t.dtype != DType.BF16 or t.device != Device.CUDA
                     or t.rank != 3 or t.shape[0] != 1 or type(t.shape[1]) is not int
                     or not 1 <= t.shape[1] <= 128 or type(t.shape[2]) is not int):
                 continue
             projections = [op for _, op in group]
+            if is_ffn:
+                # Only rewrite a complete, exclusive gated FFN boundary that
+                # the packed activation form can consume without split copies.
+                matched = None
+                for gate, up in (projections, projections[::-1]):
+                    g, u = gate.outputs[0].value_id, up.outputs[0].value_id
+                    gs, us = consumers.get(g, ()), consumers.get(u, ())
+                    if g in function.outputs or u in function.outputs or len(gs) != 1 or len(us) != 1:
+                        continue
+                    gelu, mul = gs[0], us[0]
+                    if (gelu.opcode != 'gelu' or gelu.attributes != attributes(approximation='tanh')
+                            or mul.opcode != 'mul' or gate.outputs[0].type != up.outputs[0].type):
+                        continue
+                    activated = gelu.outputs[0].value_id
+                    if (activated in function.outputs or consumers.get(activated) != [mul]
+                            or set(mul.inputs) != {activated, u}):
+                        continue
+                    matched = [gate, up]
+                    break
+                if matched is None:
+                    continue
+                projections = matched
             widths = tuple(op.outputs[0].type.shape[-1] for op in projections)
             if any(type(w) is not int or w <= 0 or w % 8 for w in widths) or sum(widths) > 65536:
                 continue
@@ -98,7 +126,8 @@ def fuse_projections(program):
         functions.append(replace(function, body=Region(tuple(result))))
     optimized = replace(program, functions=tuple(functions))
     verify_program(optimized)
-    return FusionResult(optimized, constants, tuple(receipts))
+    policy = (f'shared-input-bf16-small-rows.qkv{int(qkv)}-ffn1.v1' if ffn else POLICY)
+    return FusionResult(optimized, constants, tuple(receipts), policy)
 
 
 @dataclass(frozen=True)

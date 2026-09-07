@@ -153,7 +153,7 @@ def validate_selection_report(report, selection, cubin, program_sha256=None):
 
 
 def select_source_algorithms(source_path, *, cubin_path, selector_path, output, report_path, workspace_limit=WORKSPACE_LIMIT,
-                             fuse_projections=False, resident_kv=False):
+                             fuse_projections=False, resident_kv=False, fuse_ffn=False):
     validate_workspace_limit(workspace_limit)
     output, report_path = Path(output), Path(report_path)
     if output.resolve() == report_path.resolve() or any(x.exists() or not x.parent.is_dir() for x in (output, report_path)):
@@ -166,9 +166,9 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
     _reject_ptx(cubin, "selection input")
     source = open_source_package(str(source_path), offline=True)
     program = Pi05SourceFrontend().import_program(source).program
-    if fuse_projections:
+    if fuse_projections or fuse_ffn:
         from .projection_fusion import fuse_projections as transform
-        program = transform(program).program
+        program = transform(program, qkv=fuse_projections, ffn=fuse_ffn).program
     if resident_kv:
         from .resident_kv import make_kv_resident
         program = make_kv_resident(program).program
