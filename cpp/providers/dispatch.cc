@@ -126,8 +126,8 @@ Status PrepareProviderCommand(const CommandRecordView& record,
     if (!Access(b, "rrww")) return Refused("state update operand contract mismatch");
     return PrepareStateUpdate(payload, b, module, output);
   }
-  if (Magic(payload, "AIANG1\0") || Magic(payload, "AIGRD1\0")) {
-    if (!Access(b, Magic(payload, "AIANG1\0") ? "rrw" : "rrrw")) return Refused("compact-gate operand contract mismatch");
+  if (Magic(payload, "AIANG1\0") || Magic(payload, "AIGRD1\0") || Magic(payload, "AIGRN1\0")) {
+    if (!Access(b, Magic(payload, "AIGRN1\0") ? "rrrrww" : (Magic(payload, "AIANG1\0") ? "rrw" : "rrrw"))) return Refused("compact-gate operand contract mismatch");
     return PrepareCompactGate(payload, b, module, output);
   }
   if (Magic(payload, "AIMAD1\0")) {

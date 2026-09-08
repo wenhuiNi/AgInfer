@@ -15,7 +15,7 @@ from aginfer.errors import FormatError
 from aginfer.schema import CudaArch
 
 
-def fixture(expose=False,shared=False,reverse=False):
+def fixture(expose=False,shared=False,reverse=False,chain=False):
     program=_program(); f=program.functions[0]; t=f.inputs[0].type
     ops=list(f.body.ops)
     ops.extend([Op('mul',('gate_bf16','hidden') if reverse else ('hidden','gate_bf16'),(Value('product',t),)),
@@ -23,6 +23,15 @@ def fixture(expose=False,shared=False,reverse=False):
     outputs=('normalized','out')+(('gate_bf16',) if expose else ())
     if shared:
         ops.append(Op('add',('gate_bf16','hidden'),(Value('extra',t),)));outputs+=('extra',)
+    if chain:
+        rename=lambda name: 'out' if name=='hidden' else 'second_'+name
+        f=replace(f,inputs=(*f.inputs,Value('second_modulation',f.inputs[1].type)))
+        for op in _program().functions[0].body.ops:
+            ops.append(replace(op,inputs=tuple(rename(v) for v in op.inputs),
+                outputs=tuple(replace(v,value_id=rename(v.value_id)) for v in op.outputs)))
+        ops.extend((Op('mul',('second_normalized','second_gate_bf16'),(Value('product2',t),)),
+                    Op('add',('product2','out'),(Value('out2',t),))))
+        outputs+=('second_normalized','out2')
     f=replace(f,body=replace(f.body,ops=tuple(ops)),outputs=outputs)
     program=replace(program,functions=(f,))
     schedule=build_execution_schedule(program);inventory=build_lowering_inventory(program)
@@ -34,6 +43,21 @@ def fixture(expose=False,shared=False,reverse=False):
 
 
 class CompactGateTests(unittest.TestCase):
+    def test_residual_next_norm_fusion_preserves_both_outputs_and_coverage(self):
+        s,lowered=fixture(chain=True)
+        before={i for result in lowered.values() for c in placements_from_partial_lowering(s,result) for i in c.covered_execution_indices}
+        compact_gate_commands(s,lowered,64000,'6'*64)
+        commands=[c for result in lowered.values() for c in result.commands]
+        fused=[c for c in commands if c.command.payload.startswith(b'AIGRN1')]
+        self.assertEqual(len(fused),1)
+        self.assertEqual(len(fused[0].command.operands),6)
+        self.assertEqual(decode_command_payload(fused[0].command).kind,'residual_norm')
+        self.assertEqual(before,{i for c in commands for i in c.fused_execution_indices})
+        placements=tuple(p for result in lowered.values() for p in placements_from_partial_lowering(s,result))
+        memory=replan_memory_for_commands(s,build_memory_plan(s),placements)
+        for o in fused[0].command.operands[-2:]:
+            self.assertNotEqual(memory.allocations[o.value_id].region,AllocationRegion.UNUSED)
+
     def test_both_boundaries_and_unused_gate_allocation(self):
         for reverse in (False,True):
             s,lowered=fixture(reverse=reverse)

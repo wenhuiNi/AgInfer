@@ -20,10 +20,12 @@ __device__ __forceinline__ float LoadBf16(const __nv_bfloat16* input,
 //   normalized = bf16(rms(f32(hidden)) * (1 + scale) + shift)
 //   gate       = bf16(broadcast(gate_vector))
 // modulation is laid out as contiguous [scale, shift, gate] vectors.
-template<bool WriteGate>
+template<bool WriteGate, bool FuseResidual = false>
 __device__ __forceinline__ void AdaptiveRmsNorm(
     const __nv_bfloat16* hidden, const float* modulation,
-    __nv_bfloat16* normalized, __nv_bfloat16* gate) {
+    __nv_bfloat16* normalized, __nv_bfloat16* gate,
+    const __nv_bfloat16* activation = nullptr, const float* previous_modulation = nullptr,
+    __nv_bfloat16* residual_output = nullptr) {
   __shared__ float reduction[256];
   const int row = static_cast<int>(blockIdx.x);
   const int lane = static_cast<int>(threadIdx.x);
@@ -31,8 +33,17 @@ __device__ __forceinline__ void AdaptiveRmsNorm(
 
   const std::uint64_t row_offset = static_cast<std::uint64_t>(row) * kWidth;
   float sum_of_squares = 0.0F;
-  for (int column = lane; column < kWidth; column += blockDim.x) {
-    const float value = LoadBf16(hidden, row_offset + column);
+  float cached[4];
+  for (int column = lane, slot = 0; column < kWidth; column += blockDim.x, ++slot) {
+    float value = LoadBf16(hidden, row_offset + column);
+    if constexpr (FuseResidual) {
+      const auto g = __float2bfloat16_rn(previous_modulation[2048 + column]);
+      const auto product = __float2bfloat16_rn(__fmul_rn(LoadBf16(activation,row_offset + column),__bfloat162float(g)));
+      const auto residual = __float2bfloat16_rn(__fadd_rn(__bfloat162float(product),value));
+      residual_output[row_offset + column] = residual;
+      value = __bfloat162float(residual);
+      cached[slot] = value;
+    }
     sum_of_squares += value * value;
   }
   reduction[lane] = sum_of_squares;
@@ -44,8 +55,10 @@ __device__ __forceinline__ void AdaptiveRmsNorm(
 
   const float inverse_rms =
       rsqrtf(reduction[0] / static_cast<float>(kWidth) + kEpsilon);
-  for (int column = lane; column < kWidth; column += blockDim.x) {
-    const float value = LoadBf16(hidden, row_offset + column);
+  for (int column = lane, slot = 0; column < kWidth; column += blockDim.x, ++slot) {
+    float value;
+    if constexpr (FuseResidual) value = cached[slot];
+    else value = LoadBf16(hidden, row_offset + column);
     const float scale = modulation[column];
     const float shift = modulation[kWidth + column];
     normalized[row_offset + column] =
@@ -53,6 +66,14 @@ __device__ __forceinline__ void AdaptiveRmsNorm(
     if constexpr (WriteGate) gate[row_offset + column] =
         __float2bfloat16_rn(modulation[2 * kWidth + column]);
   }
+}
+
+extern "C" __global__ void aginfer_residual_adaptive_norm_bf16_f32_1024(
+    const __nv_bfloat16* activation, const float* previous_modulation,
+    const __nv_bfloat16* residual, const float* next_modulation,
+    __nv_bfloat16* residual_output, __nv_bfloat16* normalized) {
+  AdaptiveRmsNorm<false,true>(residual,next_modulation,normalized,nullptr,
+                             activation,previous_modulation,residual_output);
 }
 
 extern "C" __global__ void aginfer_adaptive_rms_norm_bf16_f32_1024(

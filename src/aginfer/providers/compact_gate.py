@@ -10,7 +10,7 @@ from ..lowering.inventory import LoweringKind
 from ..lowering.schedule import ValueStorage
 from ..schema import CudaArch
 
-MAGICS = {'norm': b'AIANG1\0\0', 'residual': b'AIGRD1\0\0'}
+MAGICS = {'norm': b'AIANG1\0\0', 'residual': b'AIGRD1\0\0', 'residual_norm': b'AIGRN1\0\0'}
 
 
 @dataclass(frozen=True)
@@ -99,3 +99,48 @@ def compact_gate_commands(schedule, lowered, module_bytes, module_sha256):
             break
     for key,commands in (('adaptive',norms),('rounded_mul_add',residuals)):
         lowered[key]=replace(lowered[key],commands=tuple(commands),capabilities=tuple(caps[key]))
+    fuse_residual_norm_commands(schedule,lowered,module_bytes,module_sha256)
+
+
+def fuse_residual_norm_commands(schedule,lowered,module_bytes,module_sha256):
+    """Keep both residual and normalized outputs; only remove their reread/launch."""
+    norms=lowered['adaptive']; residuals=lowered['rounded_mul_add']
+    # Include shared broadcasts/constant producers assigned by the existing
+    # coverage mechanism before moving an entire norm into another group.
+    from ..lowering.assemble import placements_from_partial_lowering
+    coverage={p.execution_index:p.covered_execution_indices
+              for p in placements_from_partial_lowering(schedule,norms)}
+    norms=replace(norms,commands=tuple(replace(n,fused_execution_indices=coverage[n.execution_index])
+                                      for n in norms.commands))
+    targets={}
+    for n in norms.commands:
+        if n.command.payload.startswith(MAGICS['norm']):
+            targets.setdefault(n.command.operands[0].value_id,[]).append(n)
+    replaced=[]; removed=set(); covered=set(); caps=list(residuals.capabilities)
+    for r in residuals.commands:
+        ro=r.command.operands
+        matches=targets.get(ro[-1].value_id,())
+        if not r.command.payload.startswith(MAGICS['residual']) or len(matches)!=1:
+            replaced.append(r); continue
+        n=matches[0]; no=n.command.operands
+        # Moving either modulation read across mutable state requires a separate
+        # state-aware executable form; do not infer immutability from an alias.
+        if any(schedule.values[o.value_id].alias_of is not None or
+               schedule.values[o.value_id].storage not in (ValueStorage.CONSTANT,ValueStorage.TEMPORARY,ValueStorage.ENTRY_INPUT)
+               for o in (ro[1],no[1])):
+            replaced.append(r); continue
+        operands=(*ro[:3],no[1],ro[3],no[2])
+        payload=CompactGatePayload('residual_norm',module_bytes,module_sha256).to_bytes()
+        cap=ProviderCapability(2,1,0,'aginfer-aot-cuda=1','aginfer.compact_gate.residual_norm.v1',
+            hashlib.sha256(payload).hexdigest(),CudaArch.SM120,LoweringKind.AOT_CUDA,'compact_gate_residual_norm',
+            tuple(schedule.values[o.value_id].type for o in operands[:4]),
+            tuple(schedule.values[o.value_id].type for o in operands[4:]),(('gate_round','bf16'),),False,0)
+        indices=tuple(sorted(set(r.fused_execution_indices)|set(n.fused_execution_indices)))
+        replaced.append(replace(r,fused_execution_indices=indices,command=replace(r.command,
+            operands=operands,payload=payload,capability_digest=cap.digest,capture_safe=False)))
+        caps.append(cap); removed.add(n.execution_index); covered.update(n.fused_execution_indices)
+    if not removed:
+        return
+    lowered['rounded_mul_add']=replace(residuals,commands=tuple(replaced),capabilities=tuple(caps))
+    lowered['adaptive']=replace(norms,commands=tuple(n for n in norms.commands if n.execution_index not in removed),
+        fused_execution_indices=tuple(i for i in norms.fused_execution_indices if i not in covered))
