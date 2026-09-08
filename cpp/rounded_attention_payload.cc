@@ -7,9 +7,11 @@ Status ParseRoundedAttentionPayload(const std::uint8_t* data,std::size_t size,Ro
   if (!data || !output || (size!=128 && size!=192)) return bad();
   *output = {};
   const bool matmul=size==192;
-  if (std::memcmp(data,matmul?"AIRAT2\0":"AIRAT1\0",8)) return bad();
+  const bool grouped=matmul && std::memcmp(data,"AIRAT3\0",8)==0;
+  if (std::memcmp(data,grouped?"AIRAT3\0":(matmul?"AIRAT2\0":"AIRAT1\0"),8)) return bad();
   auto u32=[&](int p) {std::uint32_t x=0; for (int i=0;i<4;++i) x|=std::uint32_t(data[p+i])<<(8*i); return x;};
-  if (u32(8)!=(matmul?2U:1U) || u32(12)!=120 || u32(16)<1 || u32(16)>(matmul?4U:2U)) return bad();
+  if (u32(8)!=(grouped?3U:(matmul?2U:1U)) || u32(12)!=120 || u32(16)<1 || u32(16)>(matmul && !grouped?4U:2U)) return bad();
+  output->softmax_warps=grouped?4U:1U;
   const auto variant=u32(16),q=variant>=3?256U:(variant==1?50U:968U),k=variant>=3?256U:(variant==1?1018U:968U);
   const auto heads=variant>=3?16U:8U,kvheads=variant>=3?16U:1U,dim=variant>=3?72U:256U;
   if (u32(20)!=q || u32(24)!=k || u32(28)!=heads || u32(32)!=kvheads || u32(36)!=dim) return bad();

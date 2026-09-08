@@ -76,10 +76,12 @@ namespace {
 // Explicit score/probability materialization for a library-GEMM form. The
 // finite mask fill preserves mean(V) for fully masked queries. One warp
 // owns a row; its reduction order matches contiguous eager softmax.
-template <int Q, int K, bool Pad>
+template <int Q, int K, bool Pad, int Warps=1>
 __device__ void RoundedScoreSoftmax(__nv_bfloat16* scores,
                                    const std::uint8_t* mask) {
-  const int row = blockIdx.x, lane = threadIdx.x;
+  const int row = Warps==1 ? blockIdx.x : blockIdx.x*Warps+threadIdx.x/32;
+  const int lane = Warps==1 ? threadIdx.x : threadIdx.x%32;
+  if constexpr(Warps>1) {if(row>=8*Q)return;}
   float values[32], maximum = -CUDART_INF_F;
 #pragma unroll
   for (int i = 0; i < 32; ++i) {
@@ -120,6 +122,15 @@ extern "C" __global__ void aginfer_rounded_softmax_pad_s968(
 extern "C" __global__ void aginfer_rounded_softmax_dense_s50_k1018(
     __nv_bfloat16* scores, const std::uint8_t* mask) {
   RoundedScoreSoftmax<50,1018,false>(scores, mask);
+}
+
+extern "C" __global__ void aginfer_rounded_softmax_dense_s50_k1018_w4(
+    __nv_bfloat16* scores,const std::uint8_t* mask) {
+  RoundedScoreSoftmax<50,1018,false,4>(scores,mask);
+}
+extern "C" __global__ void aginfer_rounded_softmax_pad_s968_w4(
+    __nv_bfloat16* scores,const std::uint8_t* mask) {
+  RoundedScoreSoftmax<968,968,true,4>(scores,mask);
 }
 
 extern "C" __global__ void aginfer_materialized_softmax_f32_s256(

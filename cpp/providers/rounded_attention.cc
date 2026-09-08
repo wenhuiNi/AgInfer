@@ -119,6 +119,7 @@ Status PrepareRoundedAttention(std::span<const std::uint8_t> payload,
   const char* symbol=p.variant>=3?"aginfer_materialized_softmax_f32_s256":(p.cublaslt_version ? (p.variant==1?
       "aginfer_rounded_softmax_dense_s50_k1018":"aginfer_rounded_softmax_pad_s968") : (p.variant==1?
       "aginfer_rounded_attention_bf16_dense_s50_k1018":"aginfer_rounded_attention_bf16_pad_s968"));
+  if(p.softmax_warps==4)symbol=p.variant==1?"aginfer_rounded_softmax_dense_s50_k1018_w4":"aginfer_rounded_softmax_pad_s968_w4";
   auto fn=module.driver->GetFunction(module.module,symbol);
   if (!fn.ok()) return fn.status();
   auto command=std::make_unique<RoundedAttention>();
@@ -126,7 +127,8 @@ Status PrepareRoundedAttention(std::span<const std::uint8_t> payload,
   for (int i=0;i<5;++i) command->pointers[i]=b[i].data;
   if(p.cublaslt_version) {
     command->library_matmul=true;command->scratch=workspace.data;
-    command->grid={p.query_length*p.query_heads,1,1};command->block={32,1,1};
+    command->grid={(p.query_length*p.query_heads+p.softmax_warps-1)/p.softmax_warps,1,1};
+    command->block={32*p.softmax_warps,1,1};
     status=command->qk.Prepare(p.query_length,p.key_length,true,p.qk_algorithm,p.variant>=3,p.variant==3);if(!status.ok())return status;
     status=command->pv.Prepare(p.query_length,p.key_length,false,p.pv_algorithm,p.variant>=3,p.variant==3);if(!status.ok())return status;
   }

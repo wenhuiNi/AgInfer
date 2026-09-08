@@ -19,8 +19,12 @@ class RoundedAttentionPayload:
     cublaslt_version: int = 0
     qk_algorithm: tuple[int, ...] = ()
     pv_algorithm: tuple[int, ...] = ()
+    softmax_warps: int = 1
 
     def __post_init__(self):
+        if (type(self.softmax_warps) is not int or self.softmax_warps not in (1,4)
+                or (self.softmax_warps==4 and (not self.cublaslt_version or self.variant not in (1,2)))):
+            raise ValidationError('grouped softmax requires materialized BF16 attention')
         if not isinstance(self.target_arch,CudaArch) or self.target_arch != CudaArch.SM120 or type(self.variant) is not int or self.variant not in (1,2,3,4) or (self.variant>=3 and not self.cublaslt_version):
             raise ValidationError('rounded attention requires a delivered SM120 variant')
         if type(self.module_bytes) is not int or not 0 < self.module_bytes < 2**64:
@@ -52,7 +56,8 @@ class RoundedAttentionPayload:
 
     def to_bytes(self):
         if self.cublaslt_version:
-            return ROUNDED_MATMUL_PAYLOAD.pack(b'AIRAT2\0\0',2,0,int(self.target_arch),self.variant,
+            grouped=self.softmax_warps==4
+            return ROUNDED_MATMUL_PAYLOAD.pack(b'AIRAT3\0\0' if grouped else b'AIRAT2\0\0',3 if grouped else 2,0,int(self.target_arch),self.variant,
                 self.query_length,self.key_length,self.query_heads,self.kv_heads,self.head_dim,self.module_bytes,bytes.fromhex(self.module_sha256),
                 self.cublaslt_version,self.workspace_bytes,*self.qk_algorithm,*self.pv_algorithm,bytes(24))
         return ROUNDED_ATTENTION_PAYLOAD.pack(b'AIRAT1\0\0',1,0,int(self.target_arch),self.variant,
@@ -62,7 +67,7 @@ class RoundedAttentionPayload:
     def from_bytes(cls,data):
         if len(data) not in (128,192): raise FormatError('rounded attention payload size is invalid')
         fields=(ROUNDED_MATMUL_PAYLOAD if len(data)==192 else ROUNDED_ATTENTION_PAYLOAD).unpack(data)
-        extras=(fields[12],tuple(fields[14:23]),tuple(fields[23:32])) if len(data)==192 else ()
+        extras=(fields[12],tuple(fields[14:23]),tuple(fields[23:32]),4 if fields[0]==b'AIRAT3\0\0' else 1) if len(data)==192 else ()
         try: parsed=cls(CudaArch(fields[3]),fields[4],fields[10],fields[11].hex(),*extras)
         except (ValueError,ValidationError) as e: raise FormatError('rounded attention payload is invalid') from e
         if parsed.to_bytes()!=bytes(data): raise FormatError('rounded attention payload is noncanonical or unsupported')

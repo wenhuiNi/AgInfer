@@ -30,6 +30,9 @@ int main(int argc,char** argv) {
     if(!ParseRoundedAttentionPayload(b.data(),b.size(),&p).ok() ||
        p.cublaslt_version!=120803 || p.qk_algorithm[0]!=21 || p.pv_algorithm[6]!=10 ||
        p.workspace_bytes!=(variant>=3?4194304U:(variant==1?814400U:14992384U))) return 6;
+    auto grouped=b;grouped[5]='3';grouped[8]=3;
+    const auto gs=ParseRoundedAttentionPayload(grouped.data(),grouped.size(),&p);
+    if(variant<=2 ? (!gs.ok() || p.softmax_warps!=4) : gs.ok())return 8;
     for(int pos:{0,8,10,20,84,88,92,126,162,168,191}) {
       b[pos]^=1;
       if(ParseRoundedAttentionPayload(b.data(),b.size(),&p).ok())return 7;

@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -41,6 +42,15 @@ def fixture():
 
 
 class AlgorithmSelectionTests(unittest.TestCase):
+    def test_grouped_softmax_receipt_keeps_gemm_descriptors(self):
+        selection,report,cubin=fixture()
+        p=RoundedAttentionPayload.from_bytes(bytes.fromhex(selection['attention'][0]))
+        selection['attention'][0]=replace(p,softmax_warps=4).to_bytes().hex()
+        report['selection_sha256']=digest(selection)
+        report['report_sha256']=digest({k:v for k,v in report.items() if k!='report_sha256'})
+        validate_selection_report(report,selection,cubin)
+        self.assertEqual(selection_requests(FixedAlgorithms.from_dict(selection)),report['requests'])
+
     def test_small_gemm_timing_is_bounded_and_conservative(self):
         _, report, _ = fixture()
         request = linear_request(CublasLtLinearProblem(CudaArch.SM120,CublasLtDType.BF16,50,1024,1024),1)

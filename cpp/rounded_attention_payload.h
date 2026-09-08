@@ -10,6 +10,7 @@ struct RoundedAttentionPayloadView {
   std::uint64_t module_bytes=0;
   std::array<std::uint8_t,32> module_sha256{};
   std::uint32_t cublaslt_version=0;
+  std::uint32_t softmax_warps=1;
   std::uint64_t workspace_bytes=0;
   std::array<std::int32_t,9> qk_algorithm{},pv_algorithm{};
 };

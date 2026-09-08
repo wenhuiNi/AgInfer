@@ -5,6 +5,19 @@ from aginfer.providers.rounded_attention import RoundedAttentionPayload
 from aginfer.schema import CudaArch
 
 class RoundedAttentionPayloadTests(unittest.TestCase):
+    def test_grouped_form_is_explicit_and_preserves_problem(self):
+        for variant in (1,2):
+            old=RoundedAttentionPayload(CudaArch.SM120,variant,80000,'8'*64,120803,(0,)*9,(0,)*9)
+            p=dataclasses.replace(old,softmax_warps=4)
+            self.assertEqual(p.to_bytes()[:8],b'AIRAT3\0\0')
+            self.assertEqual(RoundedAttentionPayload.from_bytes(p.to_bytes()),p)
+            self.assertEqual(p.workspace_bytes,old.workspace_bytes)
+            for kwargs in ({'variant':4},{'softmax_warps':True},{'softmax_warps':2},
+                           {'cublaslt_version':0,'qk_algorithm':(),'pv_algorithm':()}):
+                with self.assertRaises(ValidationError):dataclasses.replace(p,**kwargs)
+            bad=bytearray(p.to_bytes());bad[8]=2
+            with self.assertRaises(FormatError):RoundedAttentionPayload.from_bytes(bad)
+
     def test_library_form_round_trip(self):
         for variant in (1, 2, 3, 4):
             p=RoundedAttentionPayload(CudaArch.SM120,variant,80000,'8'*64,

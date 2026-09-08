@@ -201,7 +201,10 @@ def validate_selection_report(report, selection, cubin, program_sha256=None):
 
 
 def select_source_algorithms(source_path, *, cubin_path, selector_path, output, report_path, workspace_limit=WORKSPACE_LIMIT,
-                             fuse_projections=False, resident_kv=False, fuse_ffn=False, benchmark_small_gemm=False):
+                             fuse_projections=False, resident_kv=False, fuse_ffn=False, benchmark_small_gemm=False,
+                             grouped_softmax=False):
+    if type(grouped_softmax) is not bool:
+        raise ValidationError('grouped-softmax must be boolean')
     if type(benchmark_small_gemm) is not bool:
         raise ValidationError('benchmark-small-gemm must be boolean')
     policy = BENCHMARK_POLICY if benchmark_small_gemm else POLICY
@@ -238,7 +241,7 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
     patch_problem = next(iter(patch_problems))
     module_sha = hashlib.sha256(cubin).hexdigest()
     attention = [RoundedAttentionPayload(CudaArch.SM120, variant, len(cubin), module_sha,
-        120803, (0,) * 9, (0,) * 9) for variant in (1, 2, 4)]
+        120803, (0,) * 9, (0,) * 9, 4 if grouped_softmax and variant==1 else 1) for variant in (1, 2, 4)]
     computes = [2 if x.dtype == CublasLtDType.F32 else 1 for x in problems] + [1]
     all_linear = problems + [patch_problem]
     requests = [linear_request(p, compute, workspace_limit) for p, compute in zip(all_linear, computes)]
@@ -266,7 +269,7 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
     def config(index):
         return tuple(probe["results"][index]["algorithm"])
     attention = [RoundedAttentionPayload(CudaArch.SM120, p.variant, len(cubin), module_sha,
-        120803, config(offset + i * 2), config(offset + i * 2 + 1)) for i, p in enumerate(attention)]
+        120803, config(offset + i * 2), config(offset + i * 2 + 1),p.softmax_warps) for i, p in enumerate(attention)]
     selection = {"schema": "aginfer.fixed-algorithms.v1", "linear": [p.to_bytes().hex() for p in linear[:-1]],
         "patch": linear[-1].to_bytes().hex(), "attention": [p.to_bytes().hex() for p in attention]}
     report = {"schema": "aginfer.offline-selection.v1", "policy": policy, "compiler": compiler_identity(),
