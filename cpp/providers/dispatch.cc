@@ -10,6 +10,7 @@
 #include "providers/projection_split.h"
 #include "providers/gelu_mul.h"
 #include "providers/rounded_mul_add.h"
+#include "providers/compact_gate.h"
 #include "providers/state_update.h"
 #include "providers/aot_prefix_input.h"
 #include "providers/aot_cast.h"
@@ -124,6 +125,10 @@ Status PrepareProviderCommand(const CommandRecordView& record,
   if (Magic(payload, "AISTU1\0")) {
     if (!Access(b, "rrww")) return Refused("state update operand contract mismatch");
     return PrepareStateUpdate(payload, b, module, output);
+  }
+  if (Magic(payload, "AIANG1\0") || Magic(payload, "AIGRD1\0")) {
+    if (!Access(b, Magic(payload, "AIANG1\0") ? "rrw" : "rrrw")) return Refused("compact-gate operand contract mismatch");
+    return PrepareCompactGate(payload, b, module, output);
   }
   if (Magic(payload, "AIMAD1\0")) {
     if (!Access(b, "rrrw")) return Refused("rounded multiply-add operand contract mismatch");

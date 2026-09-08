@@ -20,7 +20,8 @@ __device__ __forceinline__ float LoadBf16(const __nv_bfloat16* input,
 //   normalized = bf16(rms(f32(hidden)) * (1 + scale) + shift)
 //   gate       = bf16(broadcast(gate_vector))
 // modulation is laid out as contiguous [scale, shift, gate] vectors.
-extern "C" __global__ void aginfer_adaptive_rms_norm_bf16_f32_1024(
+template<bool WriteGate>
+__device__ __forceinline__ void AdaptiveRmsNorm(
     const __nv_bfloat16* hidden, const float* modulation,
     __nv_bfloat16* normalized, __nv_bfloat16* gate) {
   __shared__ float reduction[256];
@@ -49,7 +50,27 @@ extern "C" __global__ void aginfer_adaptive_rms_norm_bf16_f32_1024(
     const float shift = modulation[kWidth + column];
     normalized[row_offset + column] =
         __float2bfloat16_rn(value * inverse_rms * (1.0F + scale) + shift);
-    gate[row_offset + column] =
+    if constexpr (WriteGate) gate[row_offset + column] =
         __float2bfloat16_rn(modulation[2 * kWidth + column]);
+  }
+}
+
+extern "C" __global__ void aginfer_adaptive_rms_norm_bf16_f32_1024(
+    const __nv_bfloat16* hidden, const float* modulation,
+    __nv_bfloat16* normalized, __nv_bfloat16* gate) {
+  AdaptiveRmsNorm<true>(hidden,modulation,normalized,gate);
+}
+extern "C" __global__ void aginfer_adaptive_rms_norm_no_gate_bf16_f32_1024(
+    const __nv_bfloat16* hidden, const float* modulation, __nv_bfloat16* normalized) {
+  AdaptiveRmsNorm<false>(hidden,modulation,normalized,nullptr);
+}
+extern "C" __global__ void aginfer_modulated_residual_bf16_f32_1024(
+    const __nv_bfloat16* activation, const float* modulation,
+    const __nv_bfloat16* residual, __nv_bfloat16* output) {
+  const auto i=blockIdx.x*blockDim.x+threadIdx.x;
+  if(i<51200) {
+    const auto gate=__float2bfloat16_rn(modulation[2048+(i%1024)]);
+    const auto product=__float2bfloat16_rn(__fmul_rn(__bfloat162float(activation[i]),__bfloat162float(gate)));
+    output[i]=__float2bfloat16_rn(__fadd_rn(__bfloat162float(product),__bfloat162float(residual[i])));
   }
 }

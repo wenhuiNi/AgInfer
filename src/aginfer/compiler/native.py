@@ -17,6 +17,7 @@ from ..providers.rounded_attention import RoundedAttentionPayload
 from ..providers.projection_split import lower_projection_splits
 from ..providers.gelu_mul import lower_gelu_mul
 from ..providers.rounded_mul_add import lower_rounded_mul_add
+from ..providers.compact_gate import compact_gate_commands
 from ..providers.state_update import lower_state_updates
 from ..schema import CudaArch
 
@@ -149,6 +150,7 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, 
                 indices = {i for c in fused.commands for i in c.fused_execution_indices}
                 lowered['pointwise'] = replace(lowered['pointwise'], commands=tuple(
                     c for c in lowered['pointwise'].commands if c.execution_index not in indices))
+            compact_gate_commands(schedule, lowered, len(cubin), digest)
         placements = tuple(x for result in lowered.values() for x in placements_from_partial_lowering(schedule, result))
         owners = {}
         for name, result in lowered.items():

@@ -13,7 +13,16 @@ from ..providers.rounded_attention import RoundedAttentionPayload
 from ..providers.projection_split import ProjectionSplitPayload
 from ..providers.gelu_mul import GeluMulPayload
 from ..providers.rounded_mul_add import RoundedMulAddPayload
+from ..providers.compact_gate import CompactGatePayload
 from ..providers.state_update import StateUpdatePayload
+from ..schema import CudaArch
+
+
+def _payload_arch(payload):
+    # Both compact forms have a fixed SM120 envelope, enforced by their parser.
+    if isinstance(payload, CompactGatePayload):
+        return CudaArch.SM120
+    return payload.target_arch if isinstance(payload, RoundedAttentionPayload) else payload.problem.target_arch
 
 
 def decode_command_payload(command):
@@ -22,7 +31,7 @@ def decode_command_payload(command):
         2: (p.CudaKernelPayload, p.LayerNormPayload, p.RmsNormPayload, p.RopePayload,
             p.AdaptiveRmsNormPayload, p.KvPackPayload, p.PrefixKvStorePayload,
             p.PrefixInputPayload, p.SuffixMetadataPayload, p.TimeEmbeddingPayload,
-            p.ActionSlicePayload, p.VisionAttentionPayload, ProjectionSplitPayload, StateUpdatePayload, GeluMulPayload, RoundedMulAddPayload),
+            p.ActionSlicePayload, p.VisionAttentionPayload, ProjectionSplitPayload, StateUpdatePayload, GeluMulPayload, RoundedMulAddPayload, CompactGatePayload),
         3: (p.FlashInferAttentionPayload, p.FlashInferPrefixAttentionPayload),
         4: (p.PatchProjectionPayload,),
         5: (RoundedAttentionPayload,),
@@ -109,7 +118,7 @@ def verify_artifact(path, *, require_build_record=False):
                 payload = decoded[key]
                 if hasattr(payload, "module_sha256") and (payload.module_sha256 != variant.kernels.sha256.hex() or payload.module_bytes != variant.kernels.size):
                     raise ValidationError("command references a different AOT module")
-                arch = payload.target_arch if isinstance(payload, RoundedAttentionPayload) else payload.problem.target_arch
+                arch = _payload_arch(payload)
                 if arch != variant.arch:
                     raise ValidationError("provider payload target differs from AIM variant")
                 if build is not None:

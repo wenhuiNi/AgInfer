@@ -27,6 +27,7 @@ add_library(aginfer_runtime STATIC
   cpp/projection_split_payload.cc
   cpp/gelu_mul_payload.cc
   cpp/rounded_mul_add_payload.cc
+  cpp/compact_gate_payload.cc
   cpp/state_update_payload.cc
   cpp/prefix_input_payload.cc
   cpp/prefix_kv_store_payload.cc
@@ -66,6 +67,7 @@ if(AGINFER_ENABLE_CUDA)
     cpp/providers/projection_split.cc
     cpp/providers/gelu_mul.cc
     cpp/providers/rounded_mul_add.cc
+    cpp/providers/compact_gate.cc
     cpp/providers/state_update.cc
     cpp/providers/aot_prefix_input.cc
     cpp/providers/aot_prefix_kv_store.cc
@@ -181,6 +183,12 @@ if(BUILD_TESTING)
   target_link_libraries(rounded_mul_add_test PRIVATE aginfer_runtime)
   add_dependencies(rounded_mul_add_test rounded_mul_add_fixture)
   add_test(NAME rounded_mul_add_test COMMAND rounded_mul_add_test ${CMAKE_CURRENT_BINARY_DIR}/rounded-mul-add.bin)
+  add_executable(compact_gate_test tests/compact_gate_test.cc)
+  target_compile_features(compact_gate_test PRIVATE cxx_std_20)
+  target_include_directories(compact_gate_test PRIVATE cpp)
+  target_link_libraries(compact_gate_test PRIVATE aginfer_runtime)
+  add_dependencies(compact_gate_test rounded_mul_add_fixture)
+  add_test(NAME compact_gate_test COMMAND compact_gate_test ${CMAKE_CURRENT_BINARY_DIR}/rounded-mul-add.bin)
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gelu-mul.bin
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
       ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_gelu_mul_fixture.py
@@ -218,6 +226,14 @@ if(BUILD_TESTING)
   add_dependencies(state_update_test state_update_fixture)
   add_test(NAME state_update_test COMMAND state_update_test ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin)
   if(AGINFER_ENABLE_CUDA AND AGINFER_BUILD_CUDA_TESTS AND AGINFER_CUDA_ARCH STREQUAL "120")
+    add_executable(compact_gate_cuda_test tests/compact_gate_test.cc)
+    target_compile_definitions(compact_gate_cuda_test PRIVATE TEST_CUDA=1)
+    target_compile_features(compact_gate_cuda_test PRIVATE cxx_std_20)
+    target_include_directories(compact_gate_cuda_test PRIVATE cpp)
+    target_link_libraries(compact_gate_cuda_test PRIVATE aginfer_runtime CUDA::cudart)
+    add_dependencies(compact_gate_cuda_test rounded_mul_add_fixture aginfer_aot_kernels)
+    add_test(NAME compact_gate_cuda_test COMMAND compact_gate_cuda_test
+      ${CMAKE_CURRENT_BINARY_DIR}/rounded-mul-add.bin ${AGINFER_AOT_CUBIN})
     add_executable(rounded_mul_add_cuda_test tests/rounded_mul_add_test.cc)
     target_compile_definitions(rounded_mul_add_cuda_test PRIVATE TEST_CUDA=1)
     target_compile_features(rounded_mul_add_cuda_test PRIVATE cxx_std_20)

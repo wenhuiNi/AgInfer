@@ -19,6 +19,12 @@ selection do not change. The selected module must contain the new symbol;
 missing symbols or bad bindings fail Prepare, never silently fall back. Existing
 AIMs and unfused commands remain supported. CUDA Graph remains the public default.
 
+When the gate comes from the exact adaptive norm form and is private, the same
+flag also negotiates [direct modulation consumption](compact-gate.md) on both
+boundaries. The norm then omits the broadcast gate output; residual converts
+the compact F32 gate to BF16 before its rounded multiplication. Shared/exported
+gates or mutable/aliased modulation keep the existing form.
+
 CPU tests check discovery/refusal, prior-fusion ownership, liveness, payload
 corruption and both addition operand orders. Optional GPU tests compare the
 original two kernels with the fused command at 37, 51200 and 131071 elements,
