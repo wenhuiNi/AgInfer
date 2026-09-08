@@ -1,6 +1,6 @@
 """Offline, correctness-unvalidated cuBLASLt heuristic selection.
 
-The native helper queries descriptors and AlgoCheck, never model data or timers.
+The native helper optionally times bounded synthetic GEMMs, never model data.
 The runtime continues to consume only fixed canonical payloads.
 """
 import hashlib
@@ -23,6 +23,7 @@ from ..schema import CudaArch
 from ..source_package import open_source_package
 
 POLICY = "heuristic-first-reconstructable.v1"
+BENCHMARK_POLICY = "synthetic-bf16-small-gemm-graph.v1"
 WORKSPACE_LIMIT = 4 * 1024 * 1024
 
 
@@ -70,10 +71,52 @@ def encode_requests(requests):
     return "\n".join(lines) + "\n"
 
 
-def checked_results(probe, requests):
+def benchmark_eligible(r):
+    a, b, c = r['layouts']
+    return (r['dtype'] == 2 and r['compute'] == 1 and r['bias'] == 1 and r['batch'] == 1
+        and r['trans_a'] == 1 and r['trans_b'] == 0 and 2 <= b[1] <= 128
+        and a[0] >= 256 and a[1] >= 256 and all(x[2] == x[0] for x in (a,b,c))
+        and r['alignments'] == [256]*3
+        and 2*(a[0]*a[1]+b[0]*b[1]+c[0]*c[1]+c[0])+r['workspace_limit'] <= 128*1024*1024)
+
+
+def validate_benchmark(item, request):
+    bench = item['benchmark']
+    if not benchmark_eligible(request):
+        if bench is not None:
+            raise ValidationError('timing outside bounded small-GEMM envelope')
+        return
+    if (not isinstance(bench, dict) or set(bench) != {'repeats','input','candidates'}
+            or type(bench['repeats']) is not int or bench['repeats'] != 8
+            or bench['input'] != 'synthetic-bf16-v1' or not isinstance(bench['candidates'], list)
+            or not 1 <= len(bench['candidates']) <= 4):
+        raise ValidationError('invalid small-GEMM timing receipt')
+    chosen, best, baseline, previous = None, None, None, -1
+    for i, c in enumerate(bench['candidates']):
+        if (not isinstance(c, dict) or set(c) != {'rank','matches_baseline','times_us'}
+                or type(c['rank']) is not int or not previous < c['rank'] < item['candidate_count']
+                or type(c['matches_baseline']) is not bool or not isinstance(c['times_us'], list)
+                or len(c['times_us']) != (3 if c['matches_baseline'] else 0)
+                or any(type(t) not in (int,float) or not math.isfinite(t) or t <= 0 for t in c['times_us'])
+                or (i == 0 and not c['matches_baseline'])):
+            raise ValidationError('invalid small-GEMM candidate timing')
+        previous = c['rank']
+        if not c['matches_baseline']:
+            continue
+        times = c['times_us']; median = sorted(times)[1]
+        if i == 0:
+            baseline, best, chosen = times, median, c['rank']
+        elif (median < .98*sorted(baseline)[1] and median < best
+              and all(a < b for a,b in zip(times,baseline))):
+            best, chosen = median, c['rank']
+    if chosen != item['heuristic_rank']:
+        raise ValidationError('selected tactic differs from conservative timing policy')
+
+
+def checked_results(probe, requests, *, benchmark=False):
     fields = {"schema", "arch", "cublaslt_version", "cuda_driver_version", "results"}
     if (not isinstance(probe, dict) or set(probe) != fields
-            or probe["schema"] != "aginfer.lt-selection-probe.v1"
+            or probe["schema"] != f"aginfer.lt-selection-probe.v{2 if benchmark else 1}"
             or type(probe["arch"]) is not int or probe["arch"] != 120
             or type(probe["cublaslt_version"]) is not int or probe["cublaslt_version"] != 120803
             or type(probe["cuda_driver_version"]) is not int or probe["cuda_driver_version"] <= 0
@@ -81,7 +124,10 @@ def checked_results(probe, requests):
         raise ValidationError("selection helper returned incompatible target/version/count")
     result = []
     for r, item in zip(requests, probe["results"]):
-        if (not isinstance(item, dict) or set(item) != {"algorithm", "workspace_bytes", "heuristic_rank", "candidate_count", "algo_check"}
+        fields = {"algorithm", "workspace_bytes", "heuristic_rank", "candidate_count", "algo_check"}
+        if benchmark:
+            fields.add('benchmark')
+        if (not isinstance(item, dict) or set(item) != fields
                 or item["algo_check"] is not True
                 or not isinstance(item["algorithm"], list) or len(item["algorithm"]) != 9
                 or any(type(x) is not int for x in item["algorithm"])
@@ -89,6 +135,8 @@ def checked_results(probe, requests):
                 or type(item["heuristic_rank"]) is not int or type(item["candidate_count"]) is not int
                 or not 0 <= item["heuristic_rank"] < item["candidate_count"] <= 32):
             raise ValidationError("selection helper returned an invalid AlgoCheck result")
+        if benchmark:
+            validate_benchmark(item, r)
         result.append((CublasLtAlgorithm(*item["algorithm"]), item["workspace_bytes"]))
     return result
 
@@ -105,12 +153,12 @@ def validate_selection_report(report, selection, cubin, program_sha256=None):
     fields = {"schema", "policy", "compiler", "selector", "module", "program_sha256", "inventory_sha256",
         "requests", "probe", "fixed_algorithms", "selection_sha256", "numerical_validation", "capture_validation", "timing", "report_sha256"}
     if (not isinstance(report, dict) or set(report) != fields
-            or report["schema"] != "aginfer.offline-selection.v1" or report["policy"] != POLICY
+            or report["schema"] != "aginfer.offline-selection.v1" or report["policy"] not in (POLICY, BENCHMARK_POLICY)
             or report["report_sha256"] != digest({k: v for k, v in report.items() if k != "report_sha256"})
             or report["fixed_algorithms"] != selection or report["selection_sha256"] != digest(selection)
             or report["module"] != {"bytes": len(cubin), "sha256": hashlib.sha256(cubin).hexdigest()}
             or report["numerical_validation"] != "not_run" or report["capture_validation"] != "not_run"
-            or report["timing"] != "not_run"
+            or report["timing"] != (BENCHMARK_POLICY if report["policy"] == BENCHMARK_POLICY else "not_run")
             or (program_sha256 is not None and report["program_sha256"] != program_sha256)):
         raise ValidationError("selection report does not bind this candidate/module/program")
     compiler = report["compiler"]
@@ -138,7 +186,7 @@ def validate_selection_report(report, selection, cubin, program_sha256=None):
     expected = selection_requests(algorithms, limit)
     if canonical(report["requests"]) != canonical(expected):
         raise ValidationError("selection descriptors differ from fixed payloads")
-    results = checked_results(report["probe"], expected)
+    results = checked_results(report["probe"], expected, benchmark=report['policy'] == BENCHMARK_POLICY)
     index = 0
     for p in algorithms.linear + (algorithms.patch,):
         if (p.algorithm, p.workspace_bytes) != results[index]:
@@ -153,7 +201,10 @@ def validate_selection_report(report, selection, cubin, program_sha256=None):
 
 
 def select_source_algorithms(source_path, *, cubin_path, selector_path, output, report_path, workspace_limit=WORKSPACE_LIMIT,
-                             fuse_projections=False, resident_kv=False, fuse_ffn=False):
+                             fuse_projections=False, resident_kv=False, fuse_ffn=False, benchmark_small_gemm=False):
+    if type(benchmark_small_gemm) is not bool:
+        raise ValidationError('benchmark-small-gemm must be boolean')
+    policy = BENCHMARK_POLICY if benchmark_small_gemm else POLICY
     validate_workspace_limit(workspace_limit)
     output, report_path = Path(output), Path(report_path)
     if output.resolve() == report_path.resolve() or any(x.exists() or not x.parent.is_dir() for x in (output, report_path)):
@@ -196,7 +247,7 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
     selector_path = Path(selector_path).resolve()
     selector_identity = file_identity(selector_path)
     try:
-        run = subprocess.run([str(selector_path)], input=encode_requests(requests),
+        run = subprocess.run([str(selector_path)] + (["--benchmark-small-gemm"] if benchmark_small_gemm else []), input=encode_requests(requests),
             capture_output=True, text=True, timeout=120, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ValidationError(f"offline selection helper could not run: {exc}") from exc
@@ -208,7 +259,7 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
         probe = json.loads(run.stdout)
     except ValueError as exc:
         raise ValidationError("selection helper returned invalid JSON") from exc
-    results = checked_results(probe, requests)
+    results = checked_results(probe, requests, benchmark=benchmark_small_gemm)
     linear = [CublasLtLinearPayload(p, 120803, result[0], result[1], 256, 256, 256, 256, 256, compute)
         for p, compute, result in zip(all_linear, computes, results)]
     offset = len(all_linear)
@@ -218,12 +269,13 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
         120803, config(offset + i * 2), config(offset + i * 2 + 1)) for i, p in enumerate(attention)]
     selection = {"schema": "aginfer.fixed-algorithms.v1", "linear": [p.to_bytes().hex() for p in linear[:-1]],
         "patch": linear[-1].to_bytes().hex(), "attention": [p.to_bytes().hex() for p in attention]}
-    report = {"schema": "aginfer.offline-selection.v1", "policy": POLICY, "compiler": compiler_identity(),
+    report = {"schema": "aginfer.offline-selection.v1", "policy": policy, "compiler": compiler_identity(),
         "selector": selector_identity, "module": {"bytes": len(cubin), "sha256": module_sha},
         "program_sha256": hashlib.sha256(dump_program(program).encode()).hexdigest(),
         "inventory_sha256": hashlib.sha256(dump_lowering_inventory(inventory).encode()).hexdigest(),
         "requests": requests, "probe": probe, "fixed_algorithms": selection, "selection_sha256": digest(selection),
-        "numerical_validation": "not_run", "capture_validation": "not_run", "timing": "not_run"}
+        "numerical_validation": "not_run", "capture_validation": "not_run",
+        "timing": policy if benchmark_small_gemm else "not_run"}
     report["report_sha256"] = digest(report)
     validate_selection_report(report, selection, cubin, report["program_sha256"])
     # Exclusive creation: never truncate an existing user's selection or receipt.
@@ -232,4 +284,4 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
     with report_path.open("xb") as f:
         f.write(canonical(report))
     return {"status": "algorithms_selected_not_numerically_validated", "problems": len(requests),
-        "selection": file_identity(output), "report_sha256": report["report_sha256"], "policy": POLICY}
+        "selection": file_identity(output), "report_sha256": report["report_sha256"], "policy": policy}

@@ -5,7 +5,8 @@ import unittest
 
 from aginfer.compiler.identity import digest
 from aginfer.compiler.native import FixedAlgorithms
-from aginfer.compiler.selection import (POLICY, WORKSPACE_LIMIT, attention_requests, checked_results,
+from aginfer.compiler.selection import (POLICY, BENCHMARK_POLICY, WORKSPACE_LIMIT, attention_requests, checked_results,
+    benchmark_eligible,
     encode_requests, linear_request, select_source_algorithms, selection_requests, validate_selection_report)
 from aginfer.errors import ValidationError
 from aginfer.providers.cublaslt import CublasLtAlgorithm, CublasLtDType, CublasLtLinearPayload, CublasLtLinearProblem
@@ -40,6 +41,41 @@ def fixture():
 
 
 class AlgorithmSelectionTests(unittest.TestCase):
+    def test_small_gemm_timing_is_bounded_and_conservative(self):
+        _, report, _ = fixture()
+        request = linear_request(CublasLtLinearProblem(CudaArch.SM120,CublasLtDType.BF16,50,1024,1024),1)
+        self.assertTrue(benchmark_eligible(request))
+        for field, value in [('dtype',1),('batch',2),('bias',0),('trans_a',0),('alignments',[16]*3)]:
+            other=deepcopy(request);other[field]=value
+            self.assertFalse(benchmark_eligible(other))
+        probe=deepcopy(report['probe']);probe['schema']='aginfer.lt-selection-probe.v2'
+        item=deepcopy(probe['results'][0]);probe['results']=[item]
+        item.update(candidate_count=4,heuristic_rank=2,benchmark={'repeats':8,'input':'synthetic-bf16-v1',
+            'candidates':[{'rank':0,'matches_baseline':True,'times_us':[10,10,10]},
+                          {'rank':1,'matches_baseline':False,'times_us':[]},
+                          {'rank':2,'matches_baseline':True,'times_us':[9,9,9]},
+                          {'rank':3,'matches_baseline':True,'times_us':[8,11,8]}]})
+        checked_results(probe,[request],benchmark=True)
+        for field,value in [('heuristic_rank',3),('benchmark',None)]:
+            bad=deepcopy(probe);bad['results'][0][field]=value
+            with self.assertRaises(ValidationError):checked_results(bad,[request],benchmark=True)
+        for times in ([0,0,0],[float('nan')]*3,[True]*3,[9,9], [9.99]*3):
+            bad=deepcopy(probe);bad['results'][0]['benchmark']['candidates'][2]['times_us']=times
+            with self.assertRaises(ValidationError):checked_results(bad,[request],benchmark=True)
+        with self.assertRaises(ValidationError):checked_results(probe,[request])
+
+    def test_benchmark_policy_roundtrip_does_not_claim_model_validation(self):
+        selection,report,cubin=fixture()
+        report['policy']=report['timing']=BENCHMARK_POLICY
+        report['probe']['schema']='aginfer.lt-selection-probe.v2'
+        for item in report['probe']['results']:item['benchmark']=None
+        report['report_sha256']=digest({k:v for k,v in report.items() if k!='report_sha256'})
+        validate_selection_report(report,selection,cubin)
+        for field in ('numerical_validation','capture_validation','timing'):
+            bad=deepcopy(report);bad[field]='passed'
+            bad['report_sha256']=digest({k:v for k,v in bad.items() if k!='report_sha256'})
+            with self.assertRaises(ValidationError):validate_selection_report(bad,selection,cubin)
+
     def test_linear_column_major_transpose_and_precision(self):
         p = CublasLtLinearProblem(CudaArch.SM120, CublasLtDType.F32, 50, 1024, 32)
         r = linear_request(p, 2)

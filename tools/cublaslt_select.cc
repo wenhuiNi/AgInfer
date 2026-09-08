@@ -1,7 +1,11 @@
-// Offline compiler tool only. No weights, inference, timing or runtime search.
+// Offline compiler tool only. Optional bounded synthetic Graph timing; no runtime search.
 #include <cublasLt.h>
 #include <cuda_runtime_api.h>
 #include <array>
+#include <algorithm>
+#include <cstring>
+#include <cmath>
+#include <iomanip>
 #include <cstdint>
 #include <iostream>
 #include <sstream>
@@ -99,7 +103,14 @@ bool Config(const cublasLtMatmulAlgo_t& algorithm, std::array<std::uint32_t, 9>&
   }
   return true;
 }
-std::string Select(const Request& r) {
+struct Candidate {
+  cublasLtMatmulAlgo_t algo{};
+  std::array<std::uint32_t, 9> config{};
+  std::size_t workspace = 0;
+  int rank = 0;
+};
+#include "cublaslt_benchmark.h"
+std::string Select(const Request& r, bool benchmark) {
   Resources ctx;
   Check(cublasLtCreate(&ctx.handle));
   const auto dtype = r.dtype == 1 ? CUDA_R_32F : CUDA_R_16BF;
@@ -135,6 +146,8 @@ std::string Select(const Request& r) {
   int count = 0;
   Check(cublasLtMatmulAlgoGetHeuristic(ctx.handle, ctx.op, ctx.layouts[0], ctx.layouts[1],
       ctx.layouts[2], ctx.layouts[2], ctx.preference, candidates.size(), candidates.data(), &count));
+  const bool timed = benchmark && BenchmarkEligible(r);
+  std::vector<Candidate> valid_candidates;
   for (int index = 0; index < count; ++index) {
     if (candidates[index].state != CUBLAS_STATUS_SUCCESS) continue;
     std::array<std::uint32_t, 9> config{};
@@ -154,21 +167,29 @@ std::string Select(const Request& r) {
     if (cublasLtMatmulAlgoCheck(ctx.handle, ctx.op, ctx.layouts[0], ctx.layouts[1],
         ctx.layouts[2], ctx.layouts[2], &reconstructed, &checked) != CUBLAS_STATUS_SUCCESS ||
         checked.state != CUBLAS_STATUS_SUCCESS || checked.workspaceSize > r.workspace) continue;
-    std::ostringstream out;
-    out << "{\"algorithm\":[";
-    for (std::size_t i = 0; i < config.size(); ++i) out << (i ? "," : "") << config[i];
-    out << "],\"workspace_bytes\":" << checked.workspaceSize << ",\"heuristic_rank\":" << index
-        << ",\"candidate_count\":" << count << ",\"algo_check\":true}";
-    return out.str();
+    valid_candidates.push_back({reconstructed, config, checked.workspaceSize, index});
+    if (!timed || valid_candidates.size() == 4) break;
   }
-  throw std::runtime_error("no reconstructable AlgoCheck candidate within declared envelope");
+  Require(!valid_candidates.empty(), "no reconstructable AlgoCheck candidate within declared envelope");
+  std::string receipt;
+  const auto chosen = timed ? Benchmark(ctx, r, valid_candidates, receipt) : 0;
+  const auto& selected = valid_candidates[chosen];
+  std::ostringstream out;
+  out << "{\"algorithm\":[";
+  for (std::size_t i = 0; i < selected.config.size(); ++i) out << (i ? "," : "") << selected.config[i];
+  out << "],\"workspace_bytes\":" << selected.workspace << ",\"heuristic_rank\":" << selected.rank
+      << ",\"candidate_count\":" << count << ",\"algo_check\":true";
+  if (benchmark) out << ",\"benchmark\":" << (timed ? receipt : "null");
+  return out.str() + "}";
 }
 }  // namespace
 int main(int argc, char** argv) {
   try {
-    Require(argc == 1 || (argc == 2 && std::string(argv[1]) == "--check-input"), "unknown option");
+    const bool benchmark = argc == 2 && std::string(argv[1]) == "--benchmark-small-gemm";
+    const bool check_input = argc == 2 && std::string(argv[1]) == "--check-input";
+    Require(argc == 1 || benchmark || check_input, "unknown option");
     const auto requests = ReadRequests();
-    if (argc == 2) {
+    if (check_input) {
       std::cout << "{\"request_count\":" << requests.size() << ",\"input_valid\":true}\n";
       return 0;
     }
@@ -179,10 +200,11 @@ int main(int argc, char** argv) {
     Require(prop.major * 10 + prop.minor == 120 && cublasLtGetVersion() == 120803,
             "selector requires exact SM120 and cuBLASLt 120803");
     std::ostringstream out;
-    out << "{\"schema\":\"aginfer.lt-selection-probe.v1\",\"arch\":120,\"cublaslt_version\":120803,"
+    out << "{\"schema\":\"aginfer.lt-selection-probe.v" << (benchmark ? 2 : 1)
+        << "\",\"arch\":120,\"cublaslt_version\":120803,"
         << "\"cuda_driver_version\":" << driver << ",\"results\":[";
     for (std::size_t i = 0; i < requests.size(); ++i) {
-      try { out << (i ? "," : "") << Select(requests[i]); }
+      try { out << (i ? "," : "") << Select(requests[i], benchmark); }
       catch (const std::exception& e) { throw std::runtime_error("request " + std::to_string(i) + ": " + e.what()); }
     }
     std::cout << out.str() << "]}\n";

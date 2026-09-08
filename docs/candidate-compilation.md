@@ -48,7 +48,25 @@ AIM, an old algorithm file, model activations, or calibration samples. The helpe
 queries up to 32 cuBLASLt heuristic candidates for each descriptor, reconstructs
 all nine public algorithm configuration fields, and selects the first whose
 round-trip and AlgoCheck succeed within the declared workspace limit. It does
-**not** benchmark candidates or claim the fastest implementation.
+**not** benchmark candidates by default or claim the fastest implementation.
+
+`select-algorithms --benchmark-small-gemm` instead enables a bounded offline
+prefilter: at most four reconstructable candidates for contiguous, 256-byte
+aligned BF16/FP32-accumulate biased GEMMs with batch 1, M=2..128, N/K>=256 and
+total device allocation <=128 MiB. Other descriptors retain heuristic-first.
+Synthetic nonzero BF16 inputs first require finite, bit-identical output to
+the first candidate and a poisoned-output Graph replay check. Three alternating
+forward/reverse rounds time an eight-GEMM Graph with CUDA events. A replacement
+must win all rounds and lower the median by more than 2%; otherwise the first
+candidate remains. Workspace limits and compute types are unchanged.
+
+The v2 probe records candidate ranks, rejected numerical matches, timings and
+the selection rule; the old v1 probe remains supported. This hot-buffer seam
+measurement is not model accuracy, cold/streaming-weight performance, or E2E
+certification. The selection report still says model numerical/capture
+validation is not run. Validate changed tactics with real inputs and the same
+deployment Graph policy before accepting an AIM. Tuning is never performed in
+Load, Prepare or Enqueue. See [NVIDIA's cuBLASLt documentation](https://docs.nvidia.com/cuda/archive/12.8.0/cublas/index.html).
 
 The delivered selection policy uses a 4 MiB workspace limit for linear/patch
 GEMMs and zero additional GEMM workspace for materialized attention. F32 linear
@@ -68,7 +86,7 @@ The two output paths must be distinct, new files in existing directories.
 IR/inventory, CUBIN, requests, AlgoCheck results, and the canonical algorithm
 file. With `compile --selection-report`, these bindings are checked and embedded
 in the AIM build record; `verify` checks them again. This records selection,
-**not** a numerical, capture, timing, or signed/hermetic build attestation.
+**not** a model numerical/capture, E2E timing, or signed/hermetic build attestation.
 Actual native model execution must validate every newly selected artifact.
 Legacy explicit algorithm files can still be compiled without a selection report;
 their provenance is not retroactively invented.

@@ -23,8 +23,9 @@ point accumulation, so each new artifact still requires numerical validation.
 Matching uses dataflow, shapes, and constant semantics, not model or module
 names. Unsupported patterns retain the existing independent projections.
 Derived constant descriptors and the source program digest are recorded in the
-candidate build manifest. Selection is still heuristic-first-reconstructable;
-this flag does not introduce a timing-based algorithm selector.
+candidate build manifest. Selection defaults to heuristic-first-reconstructable;
+projection fusion alone does not enable timing. The separate offline
+`select-algorithms --benchmark-small-gemm` policy can benchmark eligible shapes.
 
 The split payload is 128-byte little-endian `AIPSP1`, ABI 1.0, SM120, with rows,
 three widths, exact CUBIN size/SHA-256, and zero reserved bytes. Prepare rejects

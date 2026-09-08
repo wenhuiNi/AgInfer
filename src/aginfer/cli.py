@@ -60,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
             help="merge small-row BF16 gate/up projections and consume packed output in fused GELU/mul")
     selection_parser.add_argument("--workspace-limit", type=int, default=4 * 1024 * 1024,
         help="offline linear/patch GEMM workspace cap in bytes (default: 4194304)")
+    selection_parser.add_argument("--benchmark-small-gemm", action="store_true",
+        help="offline synthetic Graph timing of up to four small-row BF16 tactics; requires model E2E validation")
 
     verify_parser = commands.add_parser("verify", help="validate v2 executable payloads and compiler identities without CUDA execution")
     verify_parser.add_argument("aim", type=Path)
@@ -99,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
             from .compiler.selection import select_source_algorithms
             output = select_source_algorithms(args.source, cubin_path=args.cubin, selector_path=args.selector,
                 output=args.output, report_path=args.report, workspace_limit=args.workspace_limit,
-                fuse_projections=args.fuse_projections, resident_kv=args.resident_kv, fuse_ffn=args.fuse_ffn)
+                fuse_projections=args.fuse_projections, resident_kv=args.resident_kv, fuse_ffn=args.fuse_ffn,
+                benchmark_small_gemm=args.benchmark_small_gemm)
         elif args.command == "verify":
             from .compiler.verify import verify_artifact
             output = verify_artifact(args.aim, require_build_record=args.require_build_record)
