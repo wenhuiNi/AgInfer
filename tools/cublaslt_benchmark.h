@@ -1,12 +1,12 @@
 // Private implementation included in the offline selector's anonymous namespace.
 // Synthetic inputs are a tactic prefilter, never a model accuracy reference.
-bool BenchmarkEligible(const Request& r) {
+bool BenchmarkEligible(const Request& r, bool prefill = false) {
   const auto& a = r.layouts[0]; const auto& b = r.layouts[1]; const auto& c = r.layouts[2];
   return r.dtype == 2 && r.compute == 1 && r.bias == 1 && r.batch == 1 &&
-      r.trans_a == 1 && r.trans_b == 0 && b.cols >= 2 && b.cols <= 128 &&
+      r.trans_a == 1 && r.trans_b == 0 && b.cols >= (prefill ? 129 : 2) && b.cols <= (prefill ? 2048 : 128) &&
       a.rows >= 256 && a.cols >= 256 && a.ld == a.rows && b.ld == b.rows && c.ld == c.rows &&
       r.alignments == std::array<std::uint32_t, 3>{256,256,256} &&
-      2 * (a.rows*a.cols + b.rows*b.cols + c.rows*c.cols + c.rows) + r.workspace <= (128LL << 20);
+      2 * (a.rows*a.cols + b.rows*b.cols + c.rows*c.cols + c.rows) + r.workspace <= ((prefill ? 256LL : 128LL) << 20);
 }
 void Cuda(cudaError_t status) {
   if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));

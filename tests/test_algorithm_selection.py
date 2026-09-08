@@ -6,7 +6,7 @@ import unittest
 
 from aginfer.compiler.identity import digest
 from aginfer.compiler.native import FixedAlgorithms
-from aginfer.compiler.selection import (POLICY, BENCHMARK_POLICY, WORKSPACE_LIMIT, attention_requests, checked_results,
+from aginfer.compiler.selection import (POLICY, BENCHMARK_POLICY, PREFILL_BENCHMARK_POLICY, WORKSPACE_LIMIT, attention_requests, checked_results,
     benchmark_eligible,
     encode_requests, linear_request, select_source_algorithms, selection_requests, validate_selection_report)
 from aginfer.errors import ValidationError
@@ -42,6 +42,58 @@ def fixture():
 
 
 class AlgorithmSelectionTests(unittest.TestCase):
+    def test_prefill_benchmark_envelope_and_version_are_separate(self):
+        def request(m, n=32768, k=2048):
+            return linear_request(CublasLtLinearProblem(CudaArch.SM120, CublasLtDType.BF16, m, n, k), 1)
+        for m in (129, 968, 2048):
+            self.assertTrue(benchmark_eligible(request(m, 16384), prefill=True))
+            self.assertFalse(benchmark_eligible(request(m)))
+        for r in (request(128), request(2049), request(2048), request(968, 32768, 32768)):
+            self.assertFalse(benchmark_eligible(r, prefill=True))
+        r = request(968)
+        for field, value in [('dtype', 1), ('compute', 2), ('batch', 2), ('bias', 0), ('alignments', [16]*3)]:
+            bad = deepcopy(r); bad[field] = value
+            self.assertFalse(benchmark_eligible(bad, prefill=True))
+        _, report, _ = fixture()
+        probe = deepcopy(report['probe']); probe['schema'] = 'aginfer.lt-selection-probe.v3'
+        item = deepcopy(probe['results'][0]); probe['results'] = [item]
+        item.update(candidate_count=2, heuristic_rank=1, benchmark={
+            'repeats': 8, 'input': 'synthetic-bf16-v1', 'candidates': [
+                {'rank': 0, 'matches_baseline': True, 'times_us': [100, 101, 99]},
+                {'rank': 1, 'matches_baseline': True, 'times_us': [90, 91, 89]}]})
+        checked_results(probe, [r], prefill=True)
+        with self.assertRaises(ValidationError): checked_results(probe, [r], benchmark=True)
+        for mutation in ('rank', 'timing', 'missing'):
+            bad = deepcopy(probe)
+            if mutation == 'rank': bad['results'][0]['heuristic_rank'] = 0
+            elif mutation == 'timing': bad['results'][0]['benchmark']['candidates'][1]['times_us'] = [90, 102, 89]
+            else: bad['results'][0]['benchmark'] = None
+            with self.assertRaises(ValidationError): checked_results(bad, [r], prefill=True)
+        with self.assertRaises(ValidationError): checked_results(probe, [request(50)], prefill=True)
+
+    def test_prefill_receipts_and_conflicting_flags(self):
+        selection, report, cubin = fixture()
+        report['policy'] = report['timing'] = PREFILL_BENCHMARK_POLICY
+        report['probe']['schema'] = 'aginfer.lt-selection-probe.v3'
+        for item in report['probe']['results']: item['benchmark'] = None
+        report['report_sha256'] = digest({k: v for k, v in report.items() if k != 'report_sha256'})
+        validate_selection_report(report, selection, cubin)
+        # A timed prefix entry must survive the full payload/report validator,
+        # not only the standalone probe validator. Other entries remain untimed.
+        p = CublasLtLinearPayload.from_bytes(bytes.fromhex(selection['linear'][0]))
+        p = replace(p, problem=CublasLtLinearProblem(CudaArch.SM120, CublasLtDType.BF16, 968, 32768, 2048), compute_mode=1)
+        selection['linear'][0] = p.to_bytes().hex()
+        report['requests'] = selection_requests(FixedAlgorithms.from_dict(selection))
+        report['probe']['results'][0]['benchmark'] = {'repeats': 8, 'input': 'synthetic-bf16-v1',
+            'candidates': [{'rank': 0, 'matches_baseline': True, 'times_us': [700, 701, 699]}]}
+        report['selection_sha256'] = digest(selection)
+        report['report_sha256'] = digest({k: v for k, v in report.items() if k != 'report_sha256'})
+        validate_selection_report(report, selection, cubin)
+        for kwargs in ({'benchmark_prefill_gemm': 1}, {'benchmark_prefill_gemm': True, 'benchmark_small_gemm': True}):
+            with self.assertRaisesRegex(ValidationError, 'benchmark mode'):
+                select_source_algorithms('absent', cubin_path='absent', selector_path='absent',
+                    output='absent', report_path='absent', **kwargs)
+
     def test_grouped_softmax_receipt_keeps_gemm_descriptors(self):
         selection,report,cubin=fixture()
         p=RoundedAttentionPayload.from_bytes(bytes.fromhex(selection['attention'][0]))

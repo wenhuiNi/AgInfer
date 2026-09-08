@@ -110,7 +110,7 @@ struct Candidate {
   int rank = 0;
 };
 #include "cublaslt_benchmark.h"
-std::string Select(const Request& r, bool benchmark) {
+std::string Select(const Request& r, bool benchmark, bool prefill) {
   Resources ctx;
   Check(cublasLtCreate(&ctx.handle));
   const auto dtype = r.dtype == 1 ? CUDA_R_32F : CUDA_R_16BF;
@@ -146,7 +146,7 @@ std::string Select(const Request& r, bool benchmark) {
   int count = 0;
   Check(cublasLtMatmulAlgoGetHeuristic(ctx.handle, ctx.op, ctx.layouts[0], ctx.layouts[1],
       ctx.layouts[2], ctx.layouts[2], ctx.preference, candidates.size(), candidates.data(), &count));
-  const bool timed = benchmark && BenchmarkEligible(r);
+  const bool timed = benchmark && BenchmarkEligible(r, prefill);
   std::vector<Candidate> valid_candidates;
   for (int index = 0; index < count; ++index) {
     if (candidates[index].state != CUBLAS_STATUS_SUCCESS) continue;
@@ -185,7 +185,8 @@ std::string Select(const Request& r, bool benchmark) {
 }  // namespace
 int main(int argc, char** argv) {
   try {
-    const bool benchmark = argc == 2 && std::string(argv[1]) == "--benchmark-small-gemm";
+    const bool prefill = argc == 2 && std::string(argv[1]) == "--benchmark-prefill-gemm";
+    const bool benchmark = prefill || (argc == 2 && std::string(argv[1]) == "--benchmark-small-gemm");
     const bool check_input = argc == 2 && std::string(argv[1]) == "--check-input";
     Require(argc == 1 || benchmark || check_input, "unknown option");
     const auto requests = ReadRequests();
@@ -200,11 +201,11 @@ int main(int argc, char** argv) {
     Require(prop.major * 10 + prop.minor == 120 && cublasLtGetVersion() == 120803,
             "selector requires exact SM120 and cuBLASLt 120803");
     std::ostringstream out;
-    out << "{\"schema\":\"aginfer.lt-selection-probe.v" << (benchmark ? 2 : 1)
+    out << "{\"schema\":\"aginfer.lt-selection-probe.v" << (prefill ? 3 : benchmark ? 2 : 1)
         << "\",\"arch\":120,\"cublaslt_version\":120803,"
         << "\"cuda_driver_version\":" << driver << ",\"results\":[";
     for (std::size_t i = 0; i < requests.size(); ++i) {
-      try { out << (i ? "," : "") << Select(requests[i], benchmark); }
+      try { out << (i ? "," : "") << Select(requests[i], benchmark, prefill); }
       catch (const std::exception& e) { throw std::runtime_error("request " + std::to_string(i) + ": " + e.what()); }
     }
     std::cout << out.str() << "]}\n";

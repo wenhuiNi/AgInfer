@@ -60,6 +60,30 @@ forward/reverse rounds time an eight-GEMM Graph with CUDA events. A replacement
 must win all rounds and lower the median by more than 2%; otherwise the first
 candidate remains. Workspace limits and compute types are unchanged.
 
+`--benchmark-prefill-gemm` selects a separate bounded envelope: M=129..2048
+and total device allocation <=256 MiB; the same BF16, layout, alignment,
+candidate count, output comparison and timing rules apply. It is mutually
+exclusive with `--benchmark-small-gemm`. Outside the selected envelope,
+descriptors still use the first reconstructable heuristic, with no timing.
+The row and byte limits both apply (for example, M=2048/N=32768/K=2048
+exceeds this byte cap with the default workspace). The new policy uses a v3
+probe; v1 heuristic and v2 small-row reports retain their original semantics.
+The mode belongs to offline selection only; `compile` consumes its fixed
+algorithm file and validated selection report without another tuning flag.
+
+One SM120/cuBLASLt 120803 prefill probe on the fixed PI0.5 inventory tested
+four shapes and ten reconstructable candidates. Two alternatives failed the
+synthetic bit-exact filter; the others did not satisfy the conservative
+three-round timing rule. In particular, the merged gate/up shape had large
+timing variation: first-candidate times were 1122.304/733.996/793.180 us,
+while rank 2 measured 730.724/837.416/715.696 us. A lower median alone is not
+enough to override the failed middle round. These are hot-buffer kernel
+measurements, not model latency or an exhaustive tactic search.
+All fixed payload bytes stayed identical to the accepted artifact, so no
+replacement AIM or model E2E run was needed. This experiment establishes
+the offline capability, **not an inference speedup**. Heavy receipts and
+fixtures remain outside Git.
+
 The v2 probe records candidate ranks, rejected numerical matches, timings and
 the selection rule; the old v1 probe remains supported. This hot-buffer seam
 measurement is not model accuracy, cold/streaming-weight performance, or E2E

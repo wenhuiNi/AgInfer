@@ -59,11 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--bf16-large-linears", action="store_true",
             help="candidate BF16 GEMMs with F32 boundaries; changes precision and requires model validation")
         subparser.add_argument("--fuse-ffn", action="store_true",
-            help="merge small-row BF16 gate/up projections and consume packed output in fused GELU/mul")
+            help="merge BF16 gate/up projections (up to 2048 rows) and consume packed output in fused GELU/mul")
     selection_parser.add_argument("--workspace-limit", type=int, default=4 * 1024 * 1024,
         help="offline linear/patch GEMM workspace cap in bytes (default: 4194304)")
     selection_parser.add_argument("--benchmark-small-gemm", action="store_true",
         help="offline synthetic Graph timing of up to four small-row BF16 tactics; requires model E2E validation")
+    selection_parser.add_argument("--benchmark-prefill-gemm", action="store_true",
+        help="offline synthetic Graph timing of up to four 129..2048-row BF16 tactics; requires model E2E validation")
     selection_parser.add_argument("--grouped-softmax", action="store_true",
         help="select four-warp small-row BF16 softmax; prefix, vision and QK/PV algorithms unchanged")
 
@@ -107,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
             output = select_source_algorithms(args.source, cubin_path=args.cubin, selector_path=args.selector,
                 output=args.output, report_path=args.report, workspace_limit=args.workspace_limit,
                 fuse_projections=args.fuse_projections, resident_kv=args.resident_kv, fuse_ffn=args.fuse_ffn,
-                benchmark_small_gemm=args.benchmark_small_gemm,grouped_softmax=args.grouped_softmax,
+                benchmark_small_gemm=args.benchmark_small_gemm, benchmark_prefill_gemm=args.benchmark_prefill_gemm,
+                grouped_softmax=args.grouped_softmax,
                 bf16_large_linears=args.bf16_large_linears)
         elif args.command == "verify":
             from .compiler.verify import verify_artifact
