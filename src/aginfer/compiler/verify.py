@@ -109,6 +109,9 @@ def verify_artifact(path, *, require_build_record=False):
                         computed_digest.update(f.read(value.byte_size))
                     if computed_digest.hexdigest() != fold["output_sha256"]:
                         raise ValidationError("folded constant payload digest differs from evaluator output")
+                if "constant_casts" in build:
+                    from .constant_casts import validate_cast_report
+                    validate_cast_report(build["constant_casts"], plan)
             decoded = {}
             used = set()
             for command in plan.command_stream.commands:

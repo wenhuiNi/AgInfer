@@ -33,6 +33,7 @@ def pack_command_weights(
     constants: ConstantStore | None = None,
     literal_materialization: LiteralMaterialization | None = None,
     computed_constants: dict[int, bytes] | None = None,
+    widened_constants: dict[int, int] | None = None,
     chunk_size: int = 4 * 1024 * 1024,
 ) -> PackedWeights:
     """Stream command-referenced constants into one deterministic weight blob."""
@@ -64,6 +65,15 @@ def pack_command_weights(
         }
     )
     computed_constants = {} if computed_constants is None else computed_constants
+    widened_constants = {} if widened_constants is None else widened_constants
+    if (not isinstance(widened_constants, dict) or constants is None and widened_constants
+            or any(type(k) is not int or k not in referenced_roots or k in computed_constants
+                   or type(v) is not int or v not in allocations or k == v
+                   or allocations[v].region != AllocationRegion.CONSTANT
+                   or allocations[k].byte_size != 2 * allocations[v].byte_size
+                   or schedule.values[k].constant_identity is not None
+                   for k, v in widened_constants.items())):
+        raise ValidationError('widened constants require new constant roots and declared source weights')
     if (not isinstance(computed_constants, dict)
             or any(type(k) is not int or k not in referenced_roots or not isinstance(v, bytes)
                    or len(v) != allocations[k].byte_size or schedule.values[k].constant_identity is not None
@@ -99,7 +109,16 @@ def pack_command_weights(
                 span_digest = hashlib.sha256()
                 written = 0
                 record = materialized.get(value_id)
-                if value_id in computed_constants:
+                if value_id in widened_constants:
+                    from .constant_conversion import cast_chunks
+                    source_id = widened_constants[value_id]
+                    for chunk in cast_chunks(constants, schedule.values[source_id], value,
+                            allocations[source_id].byte_size, chunk_size=chunk_size):
+                        output.write(chunk)
+                        span_digest.update(chunk)
+                        whole_digest.update(chunk)
+                        written += len(chunk)
+                elif value_id in computed_constants:
                     payload = computed_constants[value_id]
                     output.write(payload)
                     span_digest.update(payload)

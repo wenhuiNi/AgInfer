@@ -97,8 +97,13 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
                 constants=constants, literals=literals)
             used = {cmd.capability_digest for cmd in commands.commands}
             capabilities = tuple(cap for cap in capabilities if cap.digest in used)
+        from .constant_casts import fold_constant_casts
+        memory, commands, widened, cast_report = fold_constant_casts(schedule, memory, commands, placements)
+        used = {cmd.capability_digest for cmd in commands.commands}
+        capabilities = tuple(cap for cap in capabilities if cap.digest in used)
         weights = pack_command_weights(root / "weights.bin", schedule, memory, inventory, commands,
-            constants=constants, literal_materialization=literals, computed_constants=computed)
+            constants=constants, literal_materialization=literals, computed_constants=computed,
+            widened_constants=widened)
         plan = compile_executable_plan(schedule, memory, commands, weights.spans, weights_bytes=weights.byte_size)
         plan_path = root / "plan.bin"
         plan_path.write_bytes(plan.data)
@@ -125,6 +130,8 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
             build["resident_kv"] = resident.report()
         if folding is not None:
             build["constant_folding"] = folding
+        if cast_report is not None:
+            build["constant_casts"] = cast_report
         if fusion is not None or resident is not None:
             build["source_program_sha256"] = hashlib.sha256(dump_program(imported.program).encode()).hexdigest()
         if selection_report is not None:
