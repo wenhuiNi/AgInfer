@@ -40,3 +40,27 @@ entry points also explicitly reject custom masks in the audited paths.
 TMA alone is not a reason to replace a global-to-global KV copy with two extra
 transfers through shared memory. Prioritize tiles with actual compute reuse.
 No FA3/TMA runtime path, performance gain or Hopper validation is claimed here.
+
+## Delivered staging probe
+
+`tools/tma_probe.cu` is a standalone, opt-in native SM120 experiment. Build with
+the nvcc command at its top (SASS only, no JIT); it is not linked into deployment
+or run by the default test suite. It compares vector, cp.async and TMA loading
+into two shared-memory buffers at lengths50/968/1018, width256, tile16/32x64,
+eight repeated consumers and no/128-byte swizzle. Four steps reuse each barrier
+with alternating parity. The output includes every loaded tile so byte parity
+and hardware OOB zero fill are observable. Misaligned maps/strides are refused;
+eager and changed/restored poisoned Graph outputs are checked before timing.
+
+On the available RTX5090/CUDA12.8, all 12 cells passed. The SM120 TMA copy
+mechanism is therefore executable independently of CUTLASS's narrow-precision
+GEMM builders. These staging-only measurements did not show a consistent win
+over cp.async; retain both options when adding actual shared-memory computation.
+The short timing includes output stores and shared-memory synchronization, not
+attention math. Some first-arm samples were outliers. This is neither a DRAM
+bandwidth measurement, a race-sanitizer attestation, nor model E2E evidence.
+Tensor-map construction is outside timing, as it would be in Prepare; this
+probe does not measure descriptor initialization cost or any MMA overlap.
+
+Reference: [NVIDIA asynchronous-copy synchronization](https://docs.nvidia.com/cuda/archive/12.5.1/cuda-c-programming-guide/index.html)
+and [tensor-map API constraints](https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html).
