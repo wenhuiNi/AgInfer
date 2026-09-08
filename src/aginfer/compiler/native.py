@@ -165,6 +165,8 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, 
     literals = build_literal_materialization(schedule, inventory, excluded_execution_indices=covered)
     memory = build_memory_plan(schedule, literal_materialization=literals)
     lowered, placements = lower(memory)
+    from .dead_commands import eliminate_dead_commands
+    memory, placements = eliminate_dead_commands(schedule, memory, placements)
     memory = replan_memory_for_commands(schedule, memory, placements)
     commands = assemble_command_stream(schedule, memory, placements, target_arch=arch)
     capabilities = {cap.digest: cap for result in lowered.values() for cap in result.capabilities}
