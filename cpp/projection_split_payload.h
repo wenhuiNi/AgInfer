@@ -6,6 +6,7 @@
 
 namespace aginfer::internal {
 struct ProjectionSplitPayloadView {
+  bool rope_pack = false;
   std::uint32_t rows = 0;
   std::array<std::uint32_t, 3> widths{};
   std::uint64_t module_bytes = 0;

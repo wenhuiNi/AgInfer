@@ -15,6 +15,7 @@ from ..lowering.memory import replan_memory_for_commands
 from ..providers.build_binding import BuildBinding, LinearBuildBinding
 from ..providers.rounded_attention import RoundedAttentionPayload
 from ..providers.projection_split import lower_projection_splits
+from ..providers.qkv_rope_pack import fuse_qkv_rope_pack
 from ..providers.gelu_mul import lower_gelu_mul
 from ..providers.rounded_mul_add import lower_rounded_mul_add
 from ..providers.compact_gate import compact_gate_commands
@@ -151,6 +152,7 @@ def lower_native_program(program, cubin: bytes, algorithms: FixedAlgorithms, *, 
                 lowered['pointwise'] = replace(lowered['pointwise'], commands=tuple(
                     c for c in lowered['pointwise'].commands if c.execution_index not in indices))
             compact_gate_commands(schedule, lowered, len(cubin), digest)
+        fuse_qkv_rope_pack(schedule, memory, lowered, len(cubin), digest)
         placements = tuple(x for result in lowered.values() for x in placements_from_partial_lowering(schedule, result))
         owners = {}
         for name, result in lowered.items():

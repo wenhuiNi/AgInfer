@@ -138,8 +138,8 @@ Status PrepareProviderCommand(const CommandRecordView& record,
     if (!Access(b, Magic(payload, "AIGMU1\0") ? "rrw" : "rw")) return Refused("GELU-multiply operand contract mismatch");
     return PrepareGeluMul(payload, b, module, output);
   }
-  if (Magic(payload, "AIPSP1\0")) {
-    if (!Access(b, "rwww")) return Refused("projection split operand contract mismatch");
+  if (Magic(payload, "AIPSP1\0") || Magic(payload, "AIQRP1\0")) {
+    if (!Access(b, Magic(payload, "AIQRP1\0") ? "rrrrwww" : "rwww")) return Refused("projection split operand contract mismatch");
     return PrepareProjectionSplit(payload, b, module, output);
   }
   if (Magic(payload, "AICUKR1")) {

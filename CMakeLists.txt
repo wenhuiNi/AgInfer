@@ -213,6 +213,12 @@ if(BUILD_TESTING)
   target_link_libraries(projection_split_test PRIVATE aginfer_runtime)
   add_dependencies(projection_split_test projection_split_fixture)
   add_test(NAME projection_split_test COMMAND projection_split_test ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin)
+  add_executable(qkv_rope_pack_test tests/qkv_rope_pack_test.cc)
+  target_compile_features(qkv_rope_pack_test PRIVATE cxx_std_20)
+  target_include_directories(qkv_rope_pack_test PRIVATE cpp)
+  target_link_libraries(qkv_rope_pack_test PRIVATE aginfer_runtime)
+  add_dependencies(qkv_rope_pack_test projection_split_fixture)
+  add_test(NAME qkv_rope_pack_test COMMAND qkv_rope_pack_test ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin)
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/src
       ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/make_state_update_fixture.py
@@ -282,6 +288,14 @@ if(BUILD_TESTING)
     add_test(NAME state_update_cuda_test COMMAND state_update_cuda_test
       ${CMAKE_CURRENT_BINARY_DIR}/state-update.bin ${AGINFER_AOT_CUBIN})
     add_executable(projection_split_cuda_test tests/projection_split_test.cc)
+    add_executable(qkv_rope_pack_cuda_test tests/qkv_rope_pack_test.cc)
+    target_compile_definitions(qkv_rope_pack_cuda_test PRIVATE TEST_CUDA=1)
+    target_compile_features(qkv_rope_pack_cuda_test PRIVATE cxx_std_20)
+    target_include_directories(qkv_rope_pack_cuda_test PRIVATE cpp)
+    target_link_libraries(qkv_rope_pack_cuda_test PRIVATE aginfer_runtime CUDA::cudart)
+    add_dependencies(qkv_rope_pack_cuda_test projection_split_fixture aginfer_aot_kernels)
+    add_test(NAME qkv_rope_pack_cuda_test COMMAND qkv_rope_pack_cuda_test
+      ${CMAKE_CURRENT_BINARY_DIR}/projection-split.bin ${AGINFER_AOT_CUBIN})
     target_compile_definitions(projection_split_cuda_test PRIVATE TEST_CUDA=1)
     target_compile_features(projection_split_cuda_test PRIVATE cxx_std_20)
     target_include_directories(projection_split_cuda_test PRIVATE cpp)

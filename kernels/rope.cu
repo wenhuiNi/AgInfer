@@ -29,18 +29,18 @@ __device__ __constant__ std::uint16_t kInverseFrequencyBf16[kHalfDim] = {
     0x393a, 0x392e, 0x3921, 0x3916, 0x390c, 0x3902, 0x38f2, 0x38e1,
 };
 
-template <int Sequence, int Heads>
+template <int Sequence, int Heads, int InputRowWidth = Heads * kHeadDim>
 __device__ __forceinline__ void RopeBshdToBhsd(
     const __nv_bfloat16* input, const std::int32_t* positions,
-    __nv_bfloat16* output) {
-  const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    __nv_bfloat16* output, int block_offset = 0) {
+  const int index = static_cast<int>((blockIdx.x - block_offset) * blockDim.x + threadIdx.x);
   constexpr int kPairs = Sequence * Heads * kHalfDim;
   if (index >= kPairs) return;
   const int pair = index % kHalfDim;
   const int row = index / kHalfDim;
   const int sequence = row % Sequence;
   const int head = row / Sequence;
-  const int input_base = (sequence * Heads + head) * kHeadDim;
+  const int input_base = sequence * InputRowWidth + head * kHeadDim;
   const int output_base = (head * Sequence + sequence) * kHeadDim;
   const float left = __bfloat162float(input[input_base + pair]);
   const float right = __bfloat162float(input[input_base + pair + kHalfDim]);
@@ -86,4 +86,31 @@ extern "C" __global__ void aginfer_rope_bf16_s50_h1(
     const __nv_bfloat16* input, const std::int32_t* positions,
     __nv_bfloat16* output) {
   RopeBshdToBhsd<50, 1>(input, positions, output);
+}
+
+// Independent block ranges: Q rotation, K rotation, prefix copies, V copy.
+// The prefix remains read-only. No captured pointer is repointed and every
+// suffix element is overwritten on every replay, including changed positions.
+extern "C" __global__ void aginfer_qkv_rope_pack_bf16_s50_p968_h8_d256(
+    const __nv_bfloat16* qkv, const std::int32_t* positions,
+    const uint4* prefix_k, const uint4* prefix_v,
+    __nv_bfloat16* query, __nv_bfloat16* packed_k, __nv_bfloat16* packed_v) {
+  if (blockIdx.x < 200) {
+    RopeBshdToBhsd<50, 8, 2560>(qkv, positions, query);
+  } else if (blockIdx.x < 225) {
+    RopeBshdToBhsd<50, 1, 2560>(qkv + 2048, positions, packed_k + 968 * 256, 200);
+  } else if (blockIdx.x < 467) {
+    constexpr int vectors = 968 * 256 / 8;
+    const int index = (blockIdx.x - 225) * 256 + threadIdx.x;
+    if (index < vectors) reinterpret_cast<uint4*>(packed_k)[index] = prefix_k[index];
+    else if (index < 2 * vectors)
+      reinterpret_cast<uint4*>(packed_v)[index - vectors] = prefix_v[index - vectors];
+  } else {
+    const int index = (blockIdx.x - 467) * 256 + threadIdx.x;
+    if (index < 50 * 32) {
+      const int row = index / 32, col = index % 32;
+      reinterpret_cast<uint4*>(packed_v)[968 * 32 + index] =
+          reinterpret_cast<const uint4*>(qkv)[row * 320 + 288 + col];
+    }
+  }
 }
