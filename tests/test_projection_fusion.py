@@ -26,6 +26,30 @@ def projection_program(rows=50, widths=(32, 8, 8), bias=0.0, dtype=DType.BF16, n
 
 
 class ProjectionFusionTests(unittest.TestCase):
+    def test_prefill_ffn_rows_and_exclusive_packed_activation(self):
+        for rows in (129,968,2048,2049):
+            p=projection_program(rows=rows,widths=(16384,16384))
+            f=p.functions[0];t=f.body.ops[-1].outputs[0].type
+            ops=f.body.ops+(
+                Op('gelu',('y0',),(Value('act',t),),attributes(approximation='tanh')),
+                Op('mul',('act','y1'),(Value('out',t),)))
+            p=replace(p,functions=(replace(f,outputs=('out',),body=Region(ops)),))
+            fused=fuse_projections(p,ffn=True)
+            if rows>2048:
+                self.assertFalse(fused.groups);continue
+            self.assertEqual(len(fused.groups),1)
+            self.assertEqual(fused.groups[0]['rows'],rows)
+            s=build_execution_schedule(fused.program)
+            lowered=lower_gelu_mul(s,64000,'6'*64,packed=True)
+            payload=decode_command_payload(lowered.commands[0].command)
+            self.assertEqual(payload.problem.packed_width,16384)
+            self.assertEqual(payload.problem.numel,rows*16384)
+            self.assertTrue(payload.problem.packed_tiled)
+            self.assertEqual(len(lowered.commands[0].command.operands),2)
+            exposed=replace(p,functions=(replace(p.functions[0],outputs=('out','y0')),))
+            self.assertFalse(fuse_projections(exposed,ffn=True).groups)
+        self.assertFalse(fuse_projections(projection_program(rows=968),ffn=True).groups)
+
     def test_ffn_gate_up_merge_and_packed_activation(self):
         for reverse in (False, True):
             p = projection_program(widths=(32, 32))

@@ -1,8 +1,9 @@
-"""Opt-in horizontal fusion of three small-row BF16 projections.
+"""Opt-in horizontal fusion of BF16 QKV and gated-FFN projections.
 
 Weights are concatenated offline along output channels, as in merged/QKV
 linear layers. Matching is by SSA/shape/constant semantics, never model names.
-The initial envelope deliberately leaves large-row and nonzero-bias forms alone.
+QKV retains its small-row envelope; exclusive FFNs also cover prefill rows.
+Nonzero-bias forms are left alone.
 """
 from dataclasses import dataclass, replace
 import hashlib
@@ -60,7 +61,7 @@ def fuse_projections(program, *, qkv=True, ffn=False):
             is_ffn = len(group) == 2 and ffn
             if ((not is_ffn and not (len(group) == 3 and qkv)) or t.dtype != DType.BF16 or t.device != Device.CUDA
                     or t.rank != 3 or t.shape[0] != 1 or type(t.shape[1]) is not int
-                    or not 1 <= t.shape[1] <= 128 or type(t.shape[2]) is not int):
+                    or not 1 <= t.shape[1] <= (2048 if is_ffn else 128) or type(t.shape[2]) is not int):
                 continue
             projections = [op for _, op in group]
             if is_ffn:
@@ -126,7 +127,7 @@ def fuse_projections(program, *, qkv=True, ffn=False):
         functions.append(replace(function, body=Region(tuple(result))))
     optimized = replace(program, functions=tuple(functions))
     verify_program(optimized)
-    policy = (f'shared-input-bf16-small-rows.qkv{int(qkv)}-ffn1.v1' if ffn else POLICY)
+    policy = (f'shared-input-bf16.qkv{int(qkv)}-ffn-rows2048.v2' if ffn else POLICY)
     return FusionResult(optimized, constants, tuple(receipts), policy)
 
 

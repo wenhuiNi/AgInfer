@@ -85,6 +85,11 @@ class GeluMulTests(unittest.TestCase):
             GeluMulPayload.from_bytes(data[:-1])
 
     def test_packed_payload_has_distinct_magic_and_strict_width(self):
+        for rows in (129,968,2048):
+            large=GeluMulPayload(GeluMulProblem(CudaArch.SM120,rows*16384,16384,True),64000,'6'*64)
+            self.assertEqual(GeluMulPayload.from_bytes(large.to_bytes()),large)
+        with self.assertRaises(ValidationError):
+            GeluMulProblem(CudaArch.SM120,2049*16384,16384,True)
         p = GeluMulPayload(GeluMulProblem(CudaArch.SM120, 204800, 4096), 64000, '6' * 64)
         self.assertEqual(GeluMulPayload.from_bytes(p.to_bytes()), p)
         self.assertTrue(p.to_bytes().startswith(b'AIGMP1'))

@@ -39,6 +39,12 @@ int main(int argc, char** argv) { try {
   Check(ParseGeluMulPayload(packed_contract.data(),128,&p).ok() && p.packed_width==4096);
   auto tiled_contract=packed_contract;tiled_contract[4]='T';
   Check(ParseGeluMulPayload(tiled_contract.data(),128,&p).ok() && p.packed_tiled);
+  for(auto rows:{129ULL,968ULL,2048ULL}) {
+    auto large=tiled_contract; Put64(large,16,rows*16384); Put64(large,64,16384);
+    Check(ParseGeluMulPayload(large.data(),128,&p).ok() && p.numel==rows*16384);
+  }
+  auto too_many=tiled_contract; Put64(too_many,16,2049*4096ULL);
+  Check(!ParseGeluMulPayload(too_many.data(),128,&p).ok());
   for(auto width:{0ULL,1ULL,32769ULL}) {
     auto bad=packed_contract; Put64(bad,64,width);
     Check(!ParseGeluMulPayload(bad.data(),128,&p).ok());
@@ -90,9 +96,9 @@ int main(int argc, char** argv) { try {
       }
     };
     compare();
-    if(n==37 || n==204800) for(char form:{'P','T'}) {
+    for(char form:{'P','T'}) {
       auto packed_payload=payload;
-      packed_payload[4]=form; Put64(packed_payload,64,n==37?37:4096);
+      packed_payload[4]=form; Put64(packed_payload,64,n==37?37:n==204800?4096:16384);
       GeluMulPayloadView pp;
       Check(ParseGeluMulPayload(packed_payload.data(),128,&pp).ok());
       std::vector<std::uint16_t> packed(2*n);

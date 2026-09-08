@@ -96,15 +96,30 @@ extern "C" __global__ void aginfer_gelu_tanh_mul_packed_bf16(
   }
 }
 
-extern "C" __global__ void aginfer_gelu_tanh_mul_packed_tiled_bf16(
+__device__ __forceinline__ void GeluTanhMulPackedTiled(
     const __nv_bfloat16* packed, __nv_bfloat16* output,
     std::uint64_t numel, std::uint32_t width) {
   const auto column = blockIdx.x * blockDim.x + threadIdx.x;
-  const auto row_offset = static_cast<std::uint64_t>(blockIdx.y) * width;
-  if (column < width && row_offset < numel) {
+  if (column >= width) return;
+  const auto row_stride = static_cast<std::uint64_t>(gridDim.y) * width;
+  for (auto row_offset = static_cast<std::uint64_t>(blockIdx.y) * width;
+       row_offset < numel; row_offset += row_stride) {
     const auto index = 2 * row_offset + column;
     const auto rounded = __float2bfloat16_rn(GeluTanh(__bfloat162float(packed[index])));
     output[row_offset + column] = __float2bfloat16_rn(
         __bfloat162float(rounded) * __bfloat162float(packed[index + width]));
   }
+}
+
+extern "C" __global__ void aginfer_gelu_tanh_mul_packed_tiled_bf16(
+    const __nv_bfloat16* packed, __nv_bfloat16* output,
+    std::uint64_t numel, std::uint32_t width) {
+  GeluTanhMulPackedTiled(packed, output, numel, width);
+}
+
+// A distinct capability symbol makes old non-row-striding modules fail at bind.
+extern "C" __global__ void aginfer_gelu_tanh_mul_packed_prefill_bf16(
+    const __nv_bfloat16* packed, __nv_bfloat16* output,
+    std::uint64_t numel, std::uint32_t width) {
+  GeluTanhMulPackedTiled(packed, output, numel, width);
 }

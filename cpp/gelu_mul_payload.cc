@@ -24,7 +24,7 @@ Status ParseGeluMulPayload(const std::uint8_t* data, std::size_t size, GeluMulPa
   p.packed_width = Read(data + 64, 4);
   p.packed_tiled = tiled;
   if (packed ? (!p.packed_width || p.packed_width > 32768 || p.numel % p.packed_width ||
-                p.numel / p.packed_width > 128) : p.packed_width != 0) return bad();
+                p.numel / p.packed_width > 2048) : p.packed_width != 0) return bad();
   std::copy_n(data + 32, 32, p.module_sha256.begin());
   *out = p;
   return Status::Ok();

@@ -46,7 +46,9 @@ Status PrepareGeluMul(std::span<const std::uint8_t> payload, std::span<const Com
     if (output <= input ? input - output < bytes : output - input < bytes*(p.packed_width ? 2 : 1)) return bad();
   }
   auto function = module.driver->GetFunction(module.module, p.packed_tiled
-      ? "aginfer_gelu_tanh_mul_packed_tiled_bf16"
+      ? (p.numel / p.packed_width > 128
+         ? "aginfer_gelu_tanh_mul_packed_prefill_bf16"
+         : "aginfer_gelu_tanh_mul_packed_tiled_bf16")
       : p.packed_width ? "aginfer_gelu_tanh_mul_packed_bf16" : "aginfer_gelu_tanh_mul_bf16");
   if (!function.ok()) return function.status();
   auto command = std::make_unique<GeluMul>();
@@ -54,8 +56,14 @@ Status PrepareGeluMul(std::span<const std::uint8_t> payload, std::span<const Com
   command->packed_width = p.packed_width;
   for (int i = 0; i < count; ++i) command->pointers[i] = b[i].data;
   command->grid = {static_cast<std::uint32_t>(std::min<std::uint64_t>((p.numel + 255) / 256, 4096)), 1, 1};
-  if (p.packed_tiled) command->grid = {(p.packed_width + 255) / 256,
-      static_cast<std::uint32_t>(p.numel / p.packed_width), 1};
+  if (p.packed_tiled) {
+    const auto columns = (p.packed_width + 255) / 256;
+    // Large prefill retains column tiling but iterates rows in each CTA.
+    // Preserve ALL old <=128-row launches: older AIM modules do not stride rows.
+    const auto rows = p.numel / p.packed_width;
+    command->grid = {columns, static_cast<std::uint32_t>(rows <= 128 ? rows :
+        std::min<std::uint64_t>(rows, 4096 / columns)), 1};
+  }
   *out = std::move(command);
   return Status::Ok();
 }

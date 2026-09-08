@@ -28,7 +28,7 @@ class GeluMulProblem:
         if self.target_arch != CudaArch.SM120 or type(self.numel) is not int or not 1 <= self.numel <= MAX_NUMEL:
             raise ValidationError('GELU-multiply requires bounded contiguous BF16 on SM120')
         if (type(self.packed_width) is not int or not 0 <= self.packed_width <= 32768
-                or (self.packed_width and (self.numel % self.packed_width or self.numel // self.packed_width > 128))):
+                or (self.packed_width and (self.numel % self.packed_width or self.numel // self.packed_width > 2048))):
             raise ValidationError('packed GELU-multiply requires bounded row-major dual projections')
         if type(self.packed_tiled) is not bool or (self.packed_tiled and not self.packed_width):
             raise ValidationError('tiled GELU-multiply requires a packed width')
