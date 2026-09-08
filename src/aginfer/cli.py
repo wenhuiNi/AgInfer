@@ -56,6 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--fuse-projections", action="store_true",
         help="use the same projection fusion policy as algorithm selection")
     for subparser in (compile_parser, selection_parser):
+        subparser.add_argument("--bf16-large-linears", action="store_true",
+            help="candidate BF16 GEMMs with F32 boundaries; changes precision and requires model validation")
         subparser.add_argument("--fuse-ffn", action="store_true",
             help="merge small-row BF16 gate/up projections and consume packed output in fused GELU/mul")
     selection_parser.add_argument("--workspace-limit", type=int, default=4 * 1024 * 1024,
@@ -98,13 +100,15 @@ def main(argv: list[str] | None = None) -> int:
                 frontend=args.frontend, scratch=args.scratch, selection_report_path=args.selection_report,
                 fuse_projections=args.fuse_projections, resident_kv=args.resident_kv,
                 constant_evaluator=args.constant_evaluator, fuse_gelu_mul=args.fuse_gelu_mul,
-                fuse_ffn=args.fuse_ffn, fuse_residual=args.fuse_residual)
+                fuse_ffn=args.fuse_ffn, fuse_residual=args.fuse_residual,
+                bf16_large_linears=args.bf16_large_linears)
         elif args.command == "select-algorithms":
             from .compiler.selection import select_source_algorithms
             output = select_source_algorithms(args.source, cubin_path=args.cubin, selector_path=args.selector,
                 output=args.output, report_path=args.report, workspace_limit=args.workspace_limit,
                 fuse_projections=args.fuse_projections, resident_kv=args.resident_kv, fuse_ffn=args.fuse_ffn,
-                benchmark_small_gemm=args.benchmark_small_gemm,grouped_softmax=args.grouped_softmax)
+                benchmark_small_gemm=args.benchmark_small_gemm,grouped_softmax=args.grouped_softmax,
+                bf16_large_linears=args.bf16_large_linears)
         elif args.command == "verify":
             from .compiler.verify import verify_artifact
             output = verify_artifact(args.aim, require_build_record=args.require_build_record)

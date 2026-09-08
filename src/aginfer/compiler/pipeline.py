@@ -45,7 +45,8 @@ def validate_kernel_record(record, cubin):
 
 def compile_source(source_path, *, output, cubin_path, kernel_record_path, algorithms_path,
                    frontend="pi05", scratch=None, selection_report_path=None, fuse_projections=False, resident_kv=False,
-                   constant_evaluator=None, fuse_gelu_mul=False, fuse_ffn=False, fuse_residual=False):
+                   constant_evaluator=None, fuse_gelu_mul=False, fuse_ffn=False, fuse_residual=False,
+                   bf16_large_linears=False):
     if frontend != "pi05":
         raise ValidationError("no delivered source frontend for this request")
     output = Path(output)
@@ -74,6 +75,10 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
         from .resident_kv import make_kv_resident
         resident = make_kv_resident(program)
         program = resident.program
+    precision = None
+    if bf16_large_linears:
+        from .linear_precision import bf16_large_linears as transform_precision
+        program, precision = transform_precision(program)
     selection_report = None
     if selection_report_path is not None:
         from .selection import validate_selection_report
@@ -132,7 +137,9 @@ def compile_source(source_path, *, output, cubin_path, kernel_record_path, algor
             build["constant_folding"] = folding
         if cast_report is not None:
             build["constant_casts"] = cast_report
-        if fusion is not None or resident is not None:
+        if precision is not None:
+            build["linear_precision"] = precision
+        if fusion is not None or resident is not None or precision is not None:
             build["source_program_sha256"] = hashlib.sha256(dump_program(imported.program).encode()).hexdigest()
         if selection_report is not None:
             build["algorithm_selection"] = selection_report

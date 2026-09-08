@@ -202,7 +202,7 @@ def validate_selection_report(report, selection, cubin, program_sha256=None):
 
 def select_source_algorithms(source_path, *, cubin_path, selector_path, output, report_path, workspace_limit=WORKSPACE_LIMIT,
                              fuse_projections=False, resident_kv=False, fuse_ffn=False, benchmark_small_gemm=False,
-                             grouped_softmax=False):
+                             grouped_softmax=False, bf16_large_linears=False):
     if type(grouped_softmax) is not bool:
         raise ValidationError('grouped-softmax must be boolean')
     if type(benchmark_small_gemm) is not bool:
@@ -226,6 +226,9 @@ def select_source_algorithms(source_path, *, cubin_path, selector_path, output, 
     if resident_kv:
         from .resident_kv import make_kv_resident
         program = make_kv_resident(program).program
+    if bf16_large_linears:
+        from .linear_precision import bf16_large_linears as transform_precision
+        program, _ = transform_precision(program)
     inventory = build_lowering_inventory(program)
     problems = sorted({CublasLtLinearProblem.from_inventory(x, target_arch=CudaArch.SM120)
         for x in inventory.ops if x.opcode == "linear"}, key=lambda p: (int(p.dtype), p.m, p.n, p.k))
